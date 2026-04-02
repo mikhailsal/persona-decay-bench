@@ -23,7 +23,6 @@ from src.cache import (
 )
 from src.config import (
     OBSERVER_CALLS,
-    OBSERVER_MAX_TOKENS,
     OBSERVER_MODEL,
     OBSERVER_TEMPERATURE,
     ModelConfig,
@@ -141,6 +140,8 @@ def _run_single_observer_call(
     observer_prompt: str,
     call_idx: int,
     *,
+    observer_model: str = OBSERVER_MODEL,
+    observer_provider: str | None = None,
     verbose: bool = False,
 ) -> tuple[dict[str, Any], float]:
     """Execute one observer call and return (rating_entry, cost)."""
@@ -158,23 +159,33 @@ def _run_single_observer_call(
             ],
         },
     ]
+    from src.config import get_reasoning_effort
+
+    reasoning = get_reasoning_effort(observer_model)
+    uses_reasoning = reasoning != "none"
+    # Many models do internal reasoning that counts against max_tokens even
+    # when we don't pass reasoning_effort.  Use a generous limit (16384) for
+    # all observer calls — the actual JSON output is ~100 tokens, so this
+    # only matters for models that burn tokens on thinking.
     result = client.chat(
-        model=OBSERVER_MODEL,
+        model=observer_model,
         messages=messages,
-        max_tokens=OBSERVER_MAX_TOKENS,
+        max_tokens=16384,
         temperature=OBSERVER_TEMPERATURE,
+        reasoning_effort=reasoning if uses_reasoning else None,
+        provider=observer_provider,
         cache_control=True,
     )
     scores = parse_caars_scores(result.content)
     entry: dict[str, Any] = {
-        "evaluator": f"{OBSERVER_MODEL}/run-{call_idx + 1}",
+        "evaluator": f"{observer_model}/run-{call_idx + 1}",
         "raw_response": result.content,
     }
     if scores is not None:
         entry["items"] = scores
         entry["total_score"] = compute_total_score(scores)
     else:
-        log.warning("Observer call %d failed to parse scores", call_idx + 1)
+        log.warning("Observer call %d failed to parse scores from %s", call_idx + 1, observer_model)
         entry["items"] = {}
         entry["total_score"] = 0
         entry["parse_error"] = True
@@ -184,7 +195,7 @@ def _run_single_observer_call(
         _con.print(
             Panel(
                 result.content,
-                title=f"Observer #{call_idx + 1} — total={total}",
+                title=f"Observer #{call_idx + 1} ({observer_model}) — total={total}",
                 border_style="cyan",
                 expand=False,
                 width=100,
@@ -200,6 +211,8 @@ def run_observer_assessment(
     up_to_turn: int,
     *,
     n_calls: int = OBSERVER_CALLS,
+    observer_model: str = OBSERVER_MODEL,
+    observer_provider: str | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
     """Run observer assessment using multiple independent evaluator calls."""
@@ -208,7 +221,14 @@ def run_observer_assessment(
     ratings: list[dict[str, Any]] = []
     total_cost = 0.0
     for call_idx in range(n_calls):
-        entry, cost = _run_single_observer_call(client, observer_prompt, call_idx, verbose=verbose)
+        entry, cost = _run_single_observer_call(
+            client,
+            observer_prompt,
+            call_idx,
+            observer_model=observer_model,
+            observer_provider=observer_provider,
+            verbose=verbose,
+        )
         ratings.append(entry)
         total_cost += cost
 
@@ -270,6 +290,55 @@ def compute_icc(ratings_matrix: list[list[int]]) -> float:
         return 0.0
 
 
+def _resolve_observer_data(
+    client: OpenRouterClient,
+    checkpoint: dict[str, Any],
+    config_dir: str,
+    run_number: int,
+    conversation_id: str,
+    conversation_turns: list[dict[str, Any]],
+    turn: int,
+    observer_model: str,
+    observer_provider: str | None,
+    verbose: bool,
+) -> dict[str, Any]:
+    """Return observer data, running assessment if not already cached."""
+    from src.config import model_id_to_slug
+
+    is_default = observer_model == OBSERVER_MODEL
+    obs_key = None if is_default else model_id_to_slug(observer_model)
+
+    if is_default:
+        already_rated = bool(checkpoint.get("observer_ratings"))
+    else:
+        already_rated = bool(checkpoint.get("observers", {}).get(obs_key, {}).get("observer_ratings"))
+
+    if not already_rated:
+        data = run_observer_assessment(
+            client,
+            conversation_turns,
+            turn,
+            observer_model=observer_model,
+            observer_provider=observer_provider,
+            verbose=verbose,
+        )
+        save_observer_scores(config_dir, run_number, conversation_id, turn, data, observer_key=obs_key)
+        return data
+
+    if is_default:
+        return {
+            "observer_ratings": checkpoint["observer_ratings"],
+            "observer_mean": checkpoint.get("observer_mean", 0.0),
+            "observer_sd": checkpoint.get("observer_sd", 0.0),
+        }
+    stored = checkpoint["observers"][obs_key]
+    return {
+        "observer_ratings": stored["observer_ratings"],
+        "observer_mean": stored.get("observer_mean", 0.0),
+        "observer_sd": stored.get("observer_sd", 0.0),
+    }
+
+
 def evaluate_checkpoint(
     client: OpenRouterClient,
     model_config: ModelConfig,
@@ -277,6 +346,8 @@ def evaluate_checkpoint(
     conversation_id: str,
     turn: int,
     *,
+    observer_model: str = OBSERVER_MODEL,
+    observer_provider: str | None = None,
     verbose: bool = False,
 ) -> dict[str, Any]:
     """Run full evaluation (self-report extraction + observer assessment) for a checkpoint.
@@ -288,36 +359,30 @@ def evaluate_checkpoint(
     if checkpoint is None:
         return {"error": f"No checkpoint found for turn {turn}"}
 
-    # Extract self-report
     sr_parsed = extract_self_report_score(checkpoint)
 
-    # Load conversation for observer assessment
     conversation_turns = load_conversation(config_dir, run_number, conversation_id)
     if not conversation_turns:
         return {"error": "No conversation data found"}
 
-    # Run observer assessment if not already done
-    if "observer_ratings" not in checkpoint or not checkpoint["observer_ratings"]:
-        observer_data = run_observer_assessment(client, conversation_turns, turn, verbose=verbose)
-        save_observer_scores(config_dir, run_number, conversation_id, turn, observer_data)
-    else:
-        observer_data = {
-            "observer_ratings": checkpoint["observer_ratings"],
-            "observer_mean": checkpoint.get("observer_mean", 0.0),
-            "observer_sd": checkpoint.get("observer_sd", 0.0),
-        }
+    observer_data = _resolve_observer_data(
+        client,
+        checkpoint,
+        config_dir,
+        run_number,
+        conversation_id,
+        conversation_turns,
+        turn,
+        observer_model,
+        observer_provider,
+        verbose,
+    )
 
-    # Compute ICC from observer ratings
     valid_ratings = [r for r in observer_data["observer_ratings"] if not r.get("parse_error") and r.get("items")]
-
     icc = 0.0
     if len(valid_ratings) >= 2:
-        item_ids = sorted(CAARS_ITEMS[0].id for _ in range(1))
         item_ids = sorted({item.id for item in CAARS_ITEMS})
-        ratings_matrix = []
-        for r in valid_ratings:
-            rater_scores = [r["items"].get(iid, 0) for iid in item_ids]
-            ratings_matrix.append(rater_scores)
+        ratings_matrix = [[r["items"].get(iid, 0) for iid in item_ids] for r in valid_ratings]
         icc = compute_icc(ratings_matrix)
 
     return {
@@ -335,6 +400,8 @@ def evaluate_model(
     model_config: ModelConfig,
     *,
     runs: list[int] | None = None,
+    observer_model: str = OBSERVER_MODEL,
+    observer_provider: str | None = None,
     verbose: bool = False,
 ) -> list[dict[str, Any]]:
     """Run observer evaluation for all conversations and checkpoints of a model.
@@ -367,6 +434,8 @@ def evaluate_model(
                     run_num,
                     conv_id,
                     turn,
+                    observer_model=observer_model,
+                    observer_provider=observer_provider,
                     verbose=verbose,
                 )
                 conv_results["checkpoints"][turn] = result

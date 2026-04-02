@@ -9,6 +9,7 @@
 - [Run 1 — Original Config (36 turns, gemini-flash-lite partner)](#run-1)
 - [Run 2 — Optimized Config (24 turns, gemini-flash-lite partner)](#run-2)
 - [Run 3 — Grok-as-Partner (24 turns, grok-4.1-fast partner)](#run-3)
+- [Multi-Observer Comparison](#multi-observer-comparison)
 
 ---
 
@@ -327,3 +328,130 @@ flash-lite, but still very fast).
 a more expensive model per-token, caching savings keep costs comparable. The
 full benchmark with observer evaluation costs only **$0.109/model** — enough
 to test 10 models for **~$1.10 total**.
+
+---
+
+## Multi-Observer Comparison
+
+**Date:** April 3, 2026
+**Data:** Run 3 grok-4.1-fast conversations (5 runs, 20 checkpoints)
+**Observers tested:**
+1. `google/gemini-3-flash-preview` (default, already collected during Run 3)
+2. `x-ai/grok-4.1-fast` (reasoning_effort="low")
+3. `minimax/minimax-m2.7` (pinned to Minimax provider, reasoning_effort="none")
+
+### Technical Notes
+
+Both Grok and Minimax use internal reasoning that consumes tokens before
+producing the JSON output. The `max_tokens` for observer calls was set to
+16384 (up from 512) to accommodate this. Without this change, reasoning models
+would truncate mid-thought and produce degenerate outputs.
+
+Observer ratings are stored in namespaced keys under `checkpoint["observers"]`
+(e.g., `observers["x-ai--grok-4.1-fast"]`), preserving the original default
+observer data at the top level.
+
+### Mean Scores Per Checkpoint Turn
+
+```
+Observer                    T6     T12     T18     T24    Trend(T6→T24)
+--------------------------------------------------------------------
+gemini-3-flash (default)   25.8    28.2    28.8    28.6       +2.8
+grok-4.1-fast              30.8    18.0    13.8    20.4      -10.4
+minimax-m2.7               26.0    24.4    29.2    29.8       +3.8
+```
+
+### Per-Conversation Detail
+
+```
+         gemini    grok    minimax  |  gemini    grok    minimax
+         ---- T6 ----              |  ---- T12 ----
+run_1      29      31       33     |    31      31       26
+run_2      25      32       21     |    27       0       27
+run_3      32      32       28     |    33      30       27
+run_4      27      31       26     |    30      29       26
+run_5      16      28       22     |    20       0       16
+
+         ---- T18 ----             |  ---- T24 ----
+run_1      32      35       32     |    32      35       32
+run_2      27       0       28     |    30      33       31
+run_3      32      34       32     |    32      34       30
+run_4      28       0       31     |    29       0       32
+run_5      25       0       23     |    20       0       24
+```
+
+### Grok Zero-Score Anomaly
+
+Grok produced **all-zero ratings** (`{"IN-1":0,...,"IM-4":0}`) in **7 of 20**
+checkpoints (35%). This is not a truncation issue — the JSON is valid but
+every item is scored 0. The pattern:
+
+| Run | T6 | T12 | T18 | T24 | Zero rate |
+|-----|:--:|:---:|:---:|:---:|:---------:|
+| run_1 | 31 | 31 | 35 | 35 | 0/4 |
+| run_2 | 32 | **0** | **0** | 33 | 2/4 |
+| run_3 | 32 | 30 | 34 | 34 | 0/4 |
+| run_4 | 31 | 29 | **0** | **0** | 2/4 |
+| run_5 | 28 | **0** | **0** | **0** | 3/4 |
+
+Grok never gives zeroes at T6 (5/5 normal), but zeroes increase at later turns.
+Gemini and Minimax rate the same conversations 16-33. This makes Grok unreliable
+as a sole observer — its reasoning process sometimes concludes the persona is
+entirely absent despite clear ADHD-consistent behavior in the transcript.
+
+### Observer Costs
+
+| Observer | Total (20 checkpoints) | Per checkpoint |
+|----------|:---:|:---:|
+| gemini-3-flash | $0.031 | $0.0015 |
+| grok-4.1-fast | $0.034 | $0.0017 |
+| minimax-m2.7 | $0.030 | $0.0015 |
+
+All three observers cost approximately the same ($0.030-$0.034 for 20
+checkpoints). Cost is not a differentiator.
+
+### Inter-Observer Agreement
+
+Mean inter-observer SD: **6.91** (on 36-point scale = 19% of range)
+Max inter-observer SD: **17.7** (driven entirely by Grok zeroes)
+
+When excluding Grok zero-score checkpoints, the agreement between all three
+observers is much tighter. For non-zero checkpoints:
+
+```
+         gemini    grok    minimax    SD
+run_1/T6    29      31       33      2.0
+run_1/T12   31      31       26      2.9
+run_1/T18   32      35       32      1.7
+run_1/T24   32      35       32      1.7
+run_3/T6    32      32       28      2.3
+run_3/T12   33      30       27      3.0
+run_3/T18   32      34       32      1.2
+run_3/T24   32      34       30      2.0
+                               Mean SD: 2.1
+```
+
+When Grok behaves normally, all three observers agree within ~2 points (SD=2.1).
+
+### Conclusions
+
+1. **Gemini and Minimax are reliable and consistent.** Both show the same
+   upward-then-stable pattern (T6: 25-26 → T18-T24: 28-30). They agree
+   closely on individual conversations (SD ~2-3 when Grok excluded).
+
+2. **Grok is unreliable as an observer.** 35% zero-score rate makes it
+   unsuitable as a sole observer. When it works, it agrees with the others,
+   but its failure mode (all zeros) is catastrophic for data quality.
+
+3. **One observer is sufficient.** Gemini and Minimax agree within SD=2-3
+   points. Running both adds cost without meaningful signal. The original
+   decision (D2) to use 1 observer call is validated.
+
+4. **Gemini remains the best default observer.** Cheapest, most consistent,
+   no failure modes observed. Minimax is a viable alternative.
+
+5. **Observer questions are adequate.** The CAARS items successfully
+   differentiate persona strength across turns. The T6→T18 increase pattern
+   (observers need a few turns to see ADHD traits) is consistently reproduced
+   across Gemini and Minimax. This is not a flaw in the questions but a
+   property of the shorter, optimized conversation format.

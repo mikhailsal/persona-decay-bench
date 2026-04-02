@@ -190,8 +190,17 @@ def save_observer_scores(
     conversation_id: str,
     turn: int,
     observer_data: dict[str, Any],
+    *,
+    observer_key: str | None = None,
 ) -> None:
-    """Add observer scores to an existing checkpoint."""
+    """Add observer scores to an existing checkpoint.
+
+    When *observer_key* is ``None`` the data is written to the top-level
+    ``observer_*`` fields (the "primary" observer used by the scorer).
+    When a key is provided (e.g. ``"x-ai--grok-4.1-fast"``) the data is
+    stored under ``observers.<key>`` so that multiple observer models can
+    coexist in the same checkpoint without overwriting each other.
+    """
     path = _checkpoint_path(config_dir_name, run, conversation_id, turn)
     if not path.exists():
         save_checkpoint(config_dir_name, run, conversation_id, turn, observer_data)
@@ -202,11 +211,20 @@ def save_observer_scores(
     except (json.JSONDecodeError, OSError):
         data = {}
 
-    data["observer_ratings"] = observer_data.get("observer_ratings", [])
-    data["observer_mean"] = observer_data.get("observer_mean")
-    data["observer_sd"] = observer_data.get("observer_sd")
-    if "observer_cost" in observer_data:
-        data["observer_cost"] = observer_data["observer_cost"]
+    if observer_key is None:
+        data["observer_ratings"] = observer_data.get("observer_ratings", [])
+        data["observer_mean"] = observer_data.get("observer_mean")
+        data["observer_sd"] = observer_data.get("observer_sd")
+        if "observer_cost" in observer_data:
+            data["observer_cost"] = observer_data["observer_cost"]
+    else:
+        observers = data.setdefault("observers", {})
+        observers[observer_key] = {
+            "observer_ratings": observer_data.get("observer_ratings", []),
+            "observer_mean": observer_data.get("observer_mean"),
+            "observer_sd": observer_data.get("observer_sd"),
+            "observer_cost": observer_data.get("observer_cost"),
+        }
 
     path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),

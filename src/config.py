@@ -73,6 +73,7 @@ REASONING_EFFORT_BY_PREFIX: dict[str, str] = {
     "anthropic/": "none",
     "x-ai/": "low",
     "moonshotai/": "none",
+    "minimax/": "none",
 }
 
 

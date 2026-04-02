@@ -113,20 +113,29 @@ def _eval_single_model(
     cfg: ModelConfig,
     timeout: float,
     verbose: bool,
+    observer_model: str | None = None,
+    observer_provider: str | None = None,
 ) -> _ModelEvalResult:
     """Run observer assessments for one model.  Thread-safe: creates its own client."""
     from src.evaluator import evaluate_model
     from src.openrouter_client import OpenRouterClient
 
+    obs_model = observer_model or OBSERVER_MODEL
     result = _ModelEvalResult(label=cfg.label)
     try:
         client = OpenRouterClient(api_key, timeout=timeout)
-        eval_results = evaluate_model(client, cfg, verbose=verbose)
+        eval_results = evaluate_model(
+            client,
+            cfg,
+            observer_model=obs_model,
+            observer_provider=observer_provider,
+            verbose=verbose,
+        )
         result.n_conversations = len(eval_results)
         result.n_checkpoints = sum(len(r.get("checkpoints", {})) for r in eval_results)
         console.print(
             f"  [green]{cfg.label}: evaluated {result.n_checkpoints} checkpoints "
-            f"across {result.n_conversations} conversations[/green]"
+            f"across {result.n_conversations} conversations (observer: {obs_model})[/green]"
         )
     except Exception as e:
         result.error = str(e)
@@ -220,20 +229,34 @@ def run(
 
 @cli.command()
 @click.option("--models", type=str, default=None, help="Comma-separated model IDs to evaluate.")
+@click.option("--observer-model", type=str, default=None, help="Observer model ID (default: config OBSERVER_MODEL).")
+@click.option("--observer-provider", type=str, default=None, help="Pin observer to a specific provider slug.")
 @click.option("--parallel", "-p", type=int, default=1, help="Number of models to evaluate in parallel.")
 @click.option("--timeout", type=float, default=API_CALL_TIMEOUT, help="Per-API-call timeout in seconds.")
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Show full observer responses in real time.")
-def evaluate(models: str | None, parallel: int, timeout: float, verbose: bool) -> None:
+def evaluate(
+    models: str | None,
+    observer_model: str | None,
+    observer_provider: str | None,
+    parallel: int,
+    timeout: float,
+    verbose: bool,
+) -> None:
     """Run observer assessments on completed conversations."""
     api_key = load_api_key()
     model_configs = _resolve_models(models)
     n_workers = max(1, min(parallel, len(model_configs)))
+    obs_display = observer_model or OBSERVER_MODEL
 
     if verbose and n_workers > 1:
         console.print("[yellow]Verbose mode disabled — not supported with parallel execution.[/yellow]")
         verbose = False
 
-    console.print(f"\n[bold]Evaluating {len(model_configs)} model(s) with {OBSERVER_CALLS}x {OBSERVER_MODEL}[/bold]")
+    console.print(f"\n[bold]Evaluating {len(model_configs)} model(s) with {OBSERVER_CALLS}x {obs_display}[/bold]")
+    if observer_model and observer_model != OBSERVER_MODEL:
+        console.print(f"  [yellow]Non-default observer: results stored under 'observers.{observer_model}'[/yellow]")
+    if observer_provider:
+        console.print(f"  [yellow]Observer provider: {observer_provider}[/yellow]")
     if n_workers > 1:
         console.print(f"  [yellow]Parallel workers: {n_workers}[/yellow]")
     if verbose:
@@ -243,7 +266,7 @@ def evaluate(models: str | None, parallel: int, timeout: float, verbose: bool) -
     if n_workers == 1:
         for cfg in model_configs:
             console.print(f"[bold cyan]Model: {cfg.label}[/bold cyan]")
-            result = _eval_single_model(api_key, cfg, timeout, verbose)
+            result = _eval_single_model(api_key, cfg, timeout, verbose, observer_model, observer_provider)
             if result.error:
                 console.print(f"  [red]Error: {result.error}[/red]\n")
             else:
@@ -253,7 +276,10 @@ def evaluate(models: str | None, parallel: int, timeout: float, verbose: bool) -
         results: list[_ModelEvalResult] = []
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
-                pool.submit(_eval_single_model, api_key, cfg, timeout, verbose): cfg.label for cfg in model_configs
+                pool.submit(
+                    _eval_single_model, api_key, cfg, timeout, verbose, observer_model, observer_provider
+                ): cfg.label
+                for cfg in model_configs
             }
             for future in as_completed(futures):
                 label = futures[future]
