@@ -7,13 +7,15 @@ from unittest.mock import MagicMock, patch
 from src.config import ModelConfig
 from src.openrouter_client import CompletionResult, UsageInfo
 from src.runner import (
-    _build_partner_messages,
-    _build_target_messages,
-    _collect_self_report,
     _generate_conversation_id,
-    _inject_explicit_cache_breakpoint,
-    _print_turn_with_cache,
     run_conversation,
+)
+from src.runner_helpers import (
+    build_partner_messages,
+    build_target_messages,
+    collect_self_report,
+    inject_explicit_cache_breakpoint,
+    print_turn_with_cache,
 )
 
 
@@ -39,13 +41,13 @@ class TestGenerateConversationId:
 class TestBuildTargetMessages:
     def test_system_prompt_first(self):
         turns = [{"role": "task", "content": "Describe your workday."}]
-        messages = _build_target_messages(turns)
+        messages = build_target_messages(turns)
         assert messages[0]["role"] == "system"
         assert "ADHD" in messages[0]["content"]
 
     def test_task_as_user(self):
         turns = [{"role": "task", "content": "Describe your workday."}]
-        messages = _build_target_messages(turns)
+        messages = build_target_messages(turns)
         assert messages[1]["role"] == "user"
         assert messages[1]["content"] == "Describe your workday."
 
@@ -54,7 +56,7 @@ class TestBuildTargetMessages:
             {"role": "task", "content": "Task"},
             {"role": "participant", "content": "My day starts..."},
         ]
-        messages = _build_target_messages(turns)
+        messages = build_target_messages(turns)
         assert messages[2]["role"] == "assistant"
 
     def test_partner_as_user(self):
@@ -63,14 +65,14 @@ class TestBuildTargetMessages:
             {"role": "participant", "content": "My day starts..."},
             {"role": "partner", "content": "How do you handle..."},
         ]
-        messages = _build_target_messages(turns)
+        messages = build_target_messages(turns)
         assert messages[3]["role"] == "user"
 
 
 class TestBuildPartnerMessages:
     def test_system_prompt(self):
         turns = [{"role": "task", "content": "Task"}]
-        messages = _build_partner_messages(turns)
+        messages = build_partner_messages(turns)
         assert messages[0]["role"] == "system"
         assert "neutral" in messages[0]["content"].lower()
 
@@ -79,7 +81,7 @@ class TestBuildPartnerMessages:
             {"role": "task", "content": "Task"},
             {"role": "participant", "content": "My response"},
         ]
-        messages = _build_partner_messages(turns)
+        messages = build_partner_messages(turns)
         assert messages[2]["role"] == "user"
 
     def test_partner_as_assistant(self):
@@ -88,7 +90,7 @@ class TestBuildPartnerMessages:
             {"role": "participant", "content": "Response"},
             {"role": "partner", "content": "Question"},
         ]
-        messages = _build_partner_messages(turns)
+        messages = build_partner_messages(turns)
         assert messages[3]["role"] == "assistant"
 
 
@@ -106,7 +108,7 @@ class TestMessageFormatAndCaching:
 
     def test_target_messages_use_plain_strings(self):
         turns = self._sample_turns()
-        messages = _build_target_messages(turns)
+        messages = build_target_messages(turns)
         for msg in messages:
             assert isinstance(
                 msg["content"], str
@@ -114,7 +116,7 @@ class TestMessageFormatAndCaching:
 
     def test_partner_messages_use_plain_strings(self):
         turns = self._sample_turns()
-        messages = _build_partner_messages(turns)
+        messages = build_partner_messages(turns)
         for msg in messages:
             assert isinstance(
                 msg["content"], str
@@ -126,8 +128,8 @@ class TestMessageFormatAndCaching:
         turns_short = self._sample_turns()[:3]
         turns_long = self._sample_turns()
 
-        msgs_short = _build_target_messages(turns_short)
-        msgs_long = _build_target_messages(turns_long)
+        msgs_short = build_target_messages(turns_short)
+        msgs_long = build_target_messages(turns_long)
 
         for i, (a, b) in enumerate(zip(msgs_short, msgs_long, strict=False)):
             assert a == b, f"Message {i} differs between short and long builds"
@@ -141,7 +143,7 @@ class TestMessageFormatAndCaching:
                 "reasoning_details": [{"type": "reasoning.encrypted", "data": "abc123"}],
             },
         ]
-        messages = _build_target_messages(turns)
+        messages = build_target_messages(turns)
         assistant_msg = messages[2]
         assert "reasoning_details" in assistant_msg
         assert assistant_msg["reasoning_details"] == [{"type": "reasoning.encrypted", "data": "abc123"}]
@@ -197,7 +199,7 @@ class TestMessageFormatAndCaching:
 
 
 class TestInjectExplicitCacheBreakpoint:
-    """Verify _inject_explicit_cache_breakpoint correctly marks the last message."""
+    """Verify inject_explicit_cache_breakpoint correctly marks the last message."""
 
     def test_converts_last_message_to_array_with_cache_control(self):
         messages = [
@@ -205,7 +207,7 @@ class TestInjectExplicitCacheBreakpoint:
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there"},
         ]
-        _inject_explicit_cache_breakpoint(messages)
+        inject_explicit_cache_breakpoint(messages)
         last = messages[-1]
         assert isinstance(last["content"], list)
         assert len(last["content"]) == 1
@@ -219,18 +221,18 @@ class TestInjectExplicitCacheBreakpoint:
             {"role": "user", "content": "Hello"},
             {"role": "assistant", "content": "Hi there"},
         ]
-        _inject_explicit_cache_breakpoint(messages)
+        inject_explicit_cache_breakpoint(messages)
         assert isinstance(messages[0]["content"], str)
         assert isinstance(messages[1]["content"], str)
 
     def test_handles_empty_list(self):
         messages: list[dict] = []
-        _inject_explicit_cache_breakpoint(messages)
+        inject_explicit_cache_breakpoint(messages)
         assert messages == []
 
     def test_single_message(self):
         messages = [{"role": "system", "content": "System only"}]
-        _inject_explicit_cache_breakpoint(messages)
+        inject_explicit_cache_breakpoint(messages)
         assert isinstance(messages[0]["content"], list)
         assert messages[0]["content"][0]["text"] == "System only"
 
@@ -241,7 +243,7 @@ class TestInjectExplicitCacheBreakpoint:
                 "content": [{"type": "text", "text": "Already array", "cache_control": {"type": "ephemeral"}}],
             },
         ]
-        _inject_explicit_cache_breakpoint(messages)
+        inject_explicit_cache_breakpoint(messages)
         assert isinstance(messages[0]["content"], list)
         assert len(messages[0]["content"]) == 1
 
@@ -257,7 +259,7 @@ class TestCollectSelfReport:
             {"role": "participant", "content": "Response"},
         ]
 
-        result = _collect_self_report(client, cfg, turns, 6)
+        result = collect_self_report(client, cfg, turns, 6)
         assert "raw_response" in result
         assert "cost" in result
         assert result["cost"]["cost_usd"] == 0.001
@@ -278,7 +280,7 @@ class TestCollectSelfReport:
             {"role": "participant", "content": "Then I get distracted..."},
         ]
 
-        _collect_self_report(client, cfg, turns, 6)
+        collect_self_report(client, cfg, turns, 6)
 
         call_kwargs = client.chat.call_args.kwargs
         messages = call_kwargs["messages"]
@@ -395,7 +397,7 @@ class TestRunConversation:
 class TestPrintTurnVerbose:
     def test_verbose_false_truncates(self, capsys):
         content = "A" * 200
-        _print_turn_with_cache(
+        print_turn_with_cache(
             "Turn  1",
             "participant",
             content,
@@ -410,7 +412,7 @@ class TestPrintTurnVerbose:
 
     def test_verbose_true_shows_full_content(self, capsys):
         content = "A" * 200
-        _print_turn_with_cache(
+        print_turn_with_cache(
             "Turn  1",
             "participant",
             content,
@@ -425,7 +427,7 @@ class TestPrintTurnVerbose:
 
     def test_verbose_short_content_no_panel(self, capsys):
         content = "Short reply"
-        _print_turn_with_cache(
+        print_turn_with_cache(
             "Turn  1",
             "participant",
             content,

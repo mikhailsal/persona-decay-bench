@@ -3,7 +3,8 @@
 Supports parallel execution: ``--parallel N`` runs N models concurrently
 via a ``ThreadPoolExecutor``, inspired by the AI Independence Bench
 parallel runner.  Pass ``--verbose`` / ``-v`` to stream full model
-responses to the terminal in real time.
+responses to the terminal in real time (sequential mode only; verbose
+is automatically disabled when running in parallel).
 """
 
 from __future__ import annotations
@@ -150,6 +151,10 @@ def run(models: str | None, parallel: int, runs: int, max_turns: int, timeout: f
     model_configs = _resolve_models(models)
     n_workers = max(1, min(parallel, len(model_configs)))
 
+    if verbose and n_workers > 1:
+        console.print("[yellow]Verbose mode disabled — not supported with parallel execution.[/yellow]")
+        verbose = False
+
     console.print(f"\n[bold]Running {len(model_configs)} model(s), {runs} conversations each, {max_turns} turns[/bold]")
     if n_workers > 1:
         console.print(f"  [yellow]Parallel workers: {n_workers}[/yellow]")
@@ -200,6 +205,10 @@ def evaluate(models: str | None, parallel: int, timeout: float, verbose: bool) -
     api_key = load_api_key()
     model_configs = _resolve_models(models)
     n_workers = max(1, min(parallel, len(model_configs)))
+
+    if verbose and n_workers > 1:
+        console.print("[yellow]Verbose mode disabled — not supported with parallel execution.[/yellow]")
+        verbose = False
 
     console.print(f"\n[bold]Evaluating {len(model_configs)} model(s) with {OBSERVER_CALLS}x {OBSERVER_MODEL}[/bold]")
     if n_workers > 1:
