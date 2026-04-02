@@ -216,6 +216,34 @@ class TestModelPricing:
         assert p.completion_price == 0.0
 
 
+class TestGrok41Config:
+    """Verify Grok 4.1 configuration for cross-model cache compatibility."""
+
+    def test_grok41_config_dir_name(self):
+        cfg = ModelConfig(model_id="x-ai/grok-4.1-fast", temperature=0.7, reasoning_effort="low")
+        assert cfg.config_dir_name == "x-ai--grok-4.1-fast@low-t0.7"
+
+    def test_grok41_reasoning_effort(self):
+        assert get_reasoning_effort("x-ai/grok-4.1-fast") == "low"
+
+    def test_grok41_effective_settings(self):
+        cfg = ModelConfig(model_id="x-ai/grok-4.1-fast", temperature=0.7, reasoning_effort="low")
+        assert cfg.effective_temperature == 0.7
+        assert cfg.effective_reasoning == "low"
+
+    def test_grok41_slug_roundtrip(self):
+        mid = "x-ai/grok-4.1-fast"
+        assert slug_to_model_id(model_id_to_slug(mid)) == mid
+
+    def test_grok41_loaded_from_yaml(self):
+        matches = [c for c in MODEL_CONFIGS.values() if c.model_id == "x-ai/grok-4.1-fast"]
+        assert len(matches) == 1
+        cfg = matches[0]
+        assert cfg.effective_reasoning == "low"
+        assert cfg.effective_temperature == 0.7
+        assert cfg.config_dir_name == "x-ai--grok-4.1-fast@low-t0.7"
+
+
 class TestYamlLoader:
     def test_load_from_yaml(self, tmp_path):
         yaml_data = {

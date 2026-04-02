@@ -92,6 +92,113 @@ class TestBuildPartnerMessages:
         assert messages[3]["role"] == "assistant"
 
 
+class TestCacheBreakpointCrossModel:
+    """Verify cache breakpoints work correctly for non-Gemini models (Grok 4.1)."""
+
+    def _sample_turns(self):
+        return [
+            {"role": "task", "content": "Describe your workday."},
+            {"role": "participant", "content": "I start by checking emails..."},
+            {"role": "partner", "content": "What happens next?"},
+            {"role": "participant", "content": "Then I get distracted..."},
+        ]
+
+    def test_target_messages_have_cache_breakpoint(self):
+        turns = self._sample_turns()
+        messages = _build_target_messages(turns)
+        last_assistant = [m for m in messages if m["role"] == "assistant"][-1]
+        assert isinstance(last_assistant["content"], list)
+        assert last_assistant["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_partner_messages_have_cache_breakpoint(self):
+        turns = self._sample_turns()
+        messages = _build_partner_messages(turns)
+        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
+        assert len(assistant_msgs) > 0
+        last_assistant = assistant_msgs[-1]
+        assert isinstance(last_assistant["content"], list)
+        assert last_assistant["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_cache_breakpoint_preserves_content(self):
+        turns = self._sample_turns()
+        messages = _build_target_messages(turns)
+        last_assistant = [m for m in messages if m["role"] == "assistant"][-1]
+        assert last_assistant["content"][0]["text"] == "Then I get distracted..."
+
+    def test_cache_disabled_skips_breakpoint(self):
+        turns = self._sample_turns()
+        messages = _build_target_messages(turns, enable_cache=False)
+        for msg in messages:
+            if msg["role"] == "assistant":
+                assert isinstance(msg["content"], str)
+
+    def test_reasoning_details_preserved_with_cache(self):
+        turns = [
+            {"role": "task", "content": "Task"},
+            {
+                "role": "participant",
+                "content": "Response with reasoning",
+                "reasoning_details": [{"type": "reasoning.encrypted", "data": "abc123"}],
+            },
+        ]
+        messages = _build_target_messages(turns)
+        assistant_msg = messages[2]
+        assert "reasoning_details" in assistant_msg
+        assert assistant_msg["reasoning_details"] == [{"type": "reasoning.encrypted", "data": "abc123"}]
+        assert isinstance(assistant_msg["content"], list)
+
+    @patch("src.runner.append_turn")
+    @patch("src.runner.save_checkpoint")
+    @patch("src.runner.conversation_exists", return_value=False)
+    def test_grok41_run_passes_reasoning_and_cache_control(self, mock_exists, mock_save_cp, mock_append):
+        client = MagicMock()
+        client.chat.return_value = _make_result("Response")
+
+        cfg = ModelConfig(model_id="x-ai/grok-4.1-fast", temperature=0.7, reasoning_effort="low")
+
+        run_conversation(
+            client=client,
+            model_config=cfg,
+            run_number=1,
+            conversation_id="grok-test",
+            max_turns=2,
+            checkpoint_turns=[],
+        )
+
+        target_calls = [
+            call for call in client.chat.call_args_list
+            if call.kwargs.get("model") == "x-ai/grok-4.1-fast"
+        ]
+        assert len(target_calls) >= 1
+        for call in target_calls:
+            assert call.kwargs.get("reasoning_effort") == "low"
+            assert call.kwargs.get("cache_control") is True
+
+    @patch("src.runner.append_turn")
+    @patch("src.runner.save_checkpoint")
+    @patch("src.runner.conversation_exists", return_value=False)
+    def test_all_api_calls_enable_cache_control(self, mock_exists, mock_save_cp, mock_append):
+        """Every API call in run_conversation must pass cache_control=True."""
+        client = MagicMock()
+        client.chat.return_value = _make_result("Response")
+
+        cfg = ModelConfig(model_id="x-ai/grok-4.1-fast", temperature=0.7, reasoning_effort="low")
+
+        run_conversation(
+            client=client,
+            model_config=cfg,
+            run_number=1,
+            conversation_id="cache-test",
+            max_turns=3,
+            checkpoint_turns=[],
+        )
+
+        for i, call in enumerate(client.chat.call_args_list):
+            assert call.kwargs.get("cache_control") is True, (
+                f"API call {i} (model={call.kwargs.get('model')}) missing cache_control=True"
+            )
+
+
 class TestCollectSelfReport:
     def test_calls_api(self):
         client = MagicMock()

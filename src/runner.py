@@ -163,6 +163,7 @@ def _collect_self_report(
         temperature=0.3,
         reasoning_effort=model_config.effective_reasoning,
         provider=model_config.provider,
+        cache_control=True,
     )
 
     return {
@@ -242,6 +243,7 @@ def run_conversation(
         temperature=model_config.effective_temperature,
         reasoning_effort=model_config.effective_reasoning,
         provider=model_config.provider,
+        cache_control=True,
     )
     total_cost_usd += result.usage.cost_usd
 
@@ -273,6 +275,7 @@ def run_conversation(
             messages=partner_messages,
             max_tokens=PARTNER_MAX_TOKENS,
             temperature=PARTNER_TEMPERATURE,
+            cache_control=True,
         )
         total_cost_usd += partner_result.usage.cost_usd
 
@@ -299,6 +302,7 @@ def run_conversation(
             temperature=model_config.effective_temperature,
             reasoning_effort=model_config.effective_reasoning,
             provider=model_config.provider,
+            cache_control=True,
         )
         total_cost_usd += target_result.usage.cost_usd
 

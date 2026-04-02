@@ -184,6 +184,38 @@ class TestOpenRouterClient:
     def test_resolve_reasoning_none_value(self):
         assert OpenRouterClient._resolve_reasoning_effort(None) is None
 
+    def test_chat_reasoning_and_cache_control_coexist(self):
+        """Grok 4.1 needs both reasoning_effort and cache_control in extra_body."""
+        mock_response = _make_mock_response(content="Grok response", cost=0.02)
+        self.client._client.chat.completions.create.return_value = mock_response
+
+        result = self.client.chat(
+            "x-ai/grok-4.1-fast",
+            [{"role": "user", "content": "hi"}],
+            reasoning_effort="low",
+            cache_control=True,
+        )
+        assert result.content == "Grok response"
+        call_kwargs = self.client._client.chat.completions.create.call_args[1]
+        extra = call_kwargs["extra_body"]
+        assert extra["reasoning"] == {"effort": "low"}
+        assert extra["cache_control"] == {"type": "ephemeral"}
+
+    def test_chat_reasoning_without_cache_control(self):
+        """Reasoning models without explicit cache_control should not inject it."""
+        mock_response = _make_mock_response(content="Response", cost=0.01)
+        self.client._client.chat.completions.create.return_value = mock_response
+
+        self.client.chat(
+            "x-ai/grok-4.1-fast",
+            [{"role": "user", "content": "hi"}],
+            reasoning_effort="low",
+        )
+        call_kwargs = self.client._client.chat.completions.create.call_args[1]
+        extra = call_kwargs.get("extra_body", {})
+        assert extra.get("reasoning") == {"effort": "low"}
+        assert "cache_control" not in extra
+
     def test_chat_with_cache_control(self):
         mock_response = _make_mock_response(content="Cached response", cost=0.01)
         self.client._client.chat.completions.create.return_value = mock_response

@@ -180,6 +180,74 @@ class TestRunObserverAssessment:
         assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
 
+class TestObserverCacheWithNonGeminiTarget:
+    """Observer caching must work regardless of which target model is being evaluated."""
+
+    def test_observer_cache_independent_of_target_model(self):
+        """Observer calls use the judge model, not the target — cache must always activate."""
+        client = MagicMock()
+        valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+        client.chat.return_value = CompletionResult(
+            content=valid_response,
+            usage=UsageInfo(cost_usd=0.01, cached_tokens=5000),
+            model="google/gemini-3-flash-preview",
+            finish_reason="stop",
+        )
+
+        turns = [
+            {"turn": 1, "exchange": 1, "role": "participant", "content": "Grok-generated response about ADHD"},
+            {"turn": 2, "exchange": 1, "role": "partner", "content": "How do you handle that?"},
+        ]
+
+        result = run_observer_assessment(client, turns, up_to_turn=6, n_calls=3)
+        assert client.chat.call_count == 3
+
+        for call in client.chat.call_args_list:
+            assert call.kwargs.get("cache_control") is True
+            messages = call.kwargs.get("messages") or call.args[1]
+            user_msg = [m for m in messages if m["role"] == "user"][0]
+            assert isinstance(user_msg["content"], list)
+            assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_evaluate_checkpoint_for_grok_model(self):
+        """Full evaluate_checkpoint flow works with a Grok model config."""
+        from src.config import ModelConfig
+
+        cfg = ModelConfig(model_id="x-ai/grok-4.1-fast", temperature=0.7, reasoning_effort="low")
+
+        with patch("src.evaluator.load_checkpoint") as mock_load_cp, \
+             patch("src.evaluator.load_conversation") as mock_load_conv, \
+             patch("src.evaluator.save_observer_scores"):
+
+            mock_load_cp.return_value = {
+                "self_report": {
+                    "raw_response": '{"IN-1": 3, "IN-2": 3, "IN-3": 3, "IN-4": 3, "HY-1": 3, "HY-2": 3, "HY-3": 3, "HY-4": 3, "IM-1": 3, "IM-2": 3, "IM-3": 3, "IM-4": 3}',
+                },
+            }
+            mock_load_conv.return_value = [
+                {"turn": 1, "role": "participant", "content": "My ADHD day..."},
+                {"turn": 2, "role": "partner", "content": "Tell me more?"},
+            ]
+
+            client = MagicMock()
+            valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+            client.chat.return_value = CompletionResult(
+                content=valid_response,
+                usage=UsageInfo(cost_usd=0.01),
+                model="google/gemini-3-flash-preview",
+                finish_reason="stop",
+            )
+
+            result = evaluate_checkpoint(client, cfg, 1, "grok-conv", 6)
+            assert result["turn"] == 6
+            assert result["self_report"] is not None
+            assert result["observer_mean"] > 0
+
+            mock_load_cp.assert_called_once_with(
+                "x-ai--grok-4.1-fast@low-t0.7", 1, "grok-conv", 6
+            )
+
+
 class TestComputeICC:
     def test_perfect_agreement(self):
         ratings = [

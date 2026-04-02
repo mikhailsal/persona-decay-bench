@@ -164,6 +164,67 @@ class TestDiscovery:
         assert list_all_cached_models() == []
 
 
+class TestCrossModelCachePaths:
+    """Cache paths work correctly for non-Gemini models like Grok 4.1."""
+
+    def test_grok41_conversation_roundtrip(self, cache_dir):
+        config_dir = "x-ai--grok-4.1-fast@low-t0.7"
+        turns = [
+            {"turn": 0, "role": "task", "content": "Describe your workday."},
+            {"turn": 1, "role": "participant", "content": "Grok response about ADHD"},
+        ]
+        save_conversation(config_dir, 1, "grok-conv-001", turns)
+        loaded = load_conversation(config_dir, 1, "grok-conv-001")
+        assert len(loaded) == 2
+        assert loaded[1]["content"] == "Grok response about ADHD"
+
+    def test_grok41_checkpoint_roundtrip(self, cache_dir):
+        config_dir = "x-ai--grok-4.1-fast@low-t0.7"
+        data = {
+            "self_report": {"raw_response": '{"IN-1": 3}'},
+            "conversation_snapshot_turns": 14,
+        }
+        save_checkpoint(config_dir, 1, "grok-conv-001", 6, data)
+        loaded = load_checkpoint(config_dir, 1, "grok-conv-001", 6)
+        assert loaded is not None
+        assert loaded["metadata"]["turn"] == 6
+        assert loaded["self_report"]["raw_response"] == '{"IN-1": 3}'
+
+    def test_grok41_discovery(self, cache_dir):
+        config_dir = "x-ai--grok-4.1-fast@low-t0.7"
+        append_turn(config_dir, 1, "grok-conv-a", {"turn": 1})
+        append_turn(config_dir, 2, "grok-conv-b", {"turn": 1})
+
+        runs = list_available_runs(config_dir)
+        assert runs == [1, 2]
+
+        convs = list_conversations(config_dir, 1)
+        assert convs == ["grok-conv-a"]
+
+    def test_grok41_appears_in_cached_models(self, cache_dir):
+        append_turn("x-ai--grok-4.1-fast@low-t0.7", 1, "conv", {"turn": 1})
+        append_turn("google--gemini-3.1-flash-lite-preview@none-t0.7", 1, "conv", {"turn": 1})
+
+        models = list_all_cached_models()
+        assert "x-ai--grok-4.1-fast@low-t0.7" in models
+        assert "google--gemini-3.1-flash-lite-preview@none-t0.7" in models
+
+    def test_grok41_observer_scores_on_checkpoint(self, cache_dir):
+        config_dir = "x-ai--grok-4.1-fast@low-t0.7"
+        save_checkpoint(config_dir, 1, "grok-conv", 6, {"self_report": {"total_score": 30}})
+
+        observer_data = {
+            "observer_ratings": [{"total_score": 24}],
+            "observer_mean": 24.0,
+            "observer_sd": 1.5,
+        }
+        save_observer_scores(config_dir, 1, "grok-conv", 6, observer_data)
+
+        loaded = load_checkpoint(config_dir, 1, "grok-conv", 6)
+        assert loaded["observer_mean"] == 24.0
+        assert loaded["self_report"]["total_score"] == 30
+
+
 class TestCostAggregation:
     def test_sum_run_total_cost(self, cache_dir):
         save_checkpoint("model@low-t0.7", 1, "conv001", 6, {
