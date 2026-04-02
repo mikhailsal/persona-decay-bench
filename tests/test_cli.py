@@ -7,7 +7,7 @@ from unittest.mock import patch
 import pytest
 from click.testing import CliRunner
 
-from src.cli import _resolve_models, cli
+from src.cli import _eval_single_model, _ModelEvalResult, _ModelRunResult, _resolve_models, _run_single_model, cli
 from src.config import MODEL_CONFIGS, ModelConfig
 
 
@@ -124,7 +124,43 @@ class TestRunCommand:
         mock_run.side_effect = RuntimeError("API error")
         result = runner.invoke(cli, ["run", "--models", "test/model", "--runs", "1"])
         assert result.exit_code == 0
-        assert "Error" in result.output
+        assert "ERROR" in result.output
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_run_verbose_flag(self, mock_key, mock_client_cls, mock_run, runner):
+        mock_run.return_value = [{"status": "completed"}]
+        result = runner.invoke(cli, ["run", "--models", "test/model", "--runs", "1", "--verbose"])
+        assert result.exit_code == 0
+        assert "Verbose mode: ON" in result.output
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["verbose"] is True
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_run_parallel(self, mock_key, mock_client_cls, mock_run, runner):
+        mock_run.return_value = [{"status": "completed"}]
+        result = runner.invoke(
+            cli,
+            ["run", "--models", "test/a,test/b", "--runs", "1", "--parallel", "2"],
+        )
+        assert result.exit_code == 0
+        assert "Parallel workers: 2" in result.output
+        assert mock_run.call_count == 2
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_run_parallel_with_error(self, mock_key, mock_client_cls, mock_run, runner):
+        mock_run.side_effect = RuntimeError("boom")
+        result = runner.invoke(
+            cli,
+            ["run", "--models", "test/a,test/b", "--runs", "1", "--parallel", "2"],
+        )
+        assert result.exit_code == 0
+        assert "failed" in result.output.lower()
 
 
 class TestEvaluateCommand:
@@ -136,3 +172,79 @@ class TestEvaluateCommand:
         result = runner.invoke(cli, ["evaluate", "--models", "test/model"])
         assert result.exit_code == 0
         mock_eval.assert_called_once()
+
+    @patch("src.evaluator.evaluate_model")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_evaluate_verbose_flag(self, mock_key, mock_client_cls, mock_eval, runner):
+        mock_eval.return_value = [{"checkpoints": {6: {}}}]
+        result = runner.invoke(cli, ["evaluate", "--models", "test/model", "--verbose"])
+        assert result.exit_code == 0
+        assert "Verbose mode: ON" in result.output
+        call_kwargs = mock_eval.call_args
+        assert call_kwargs[1]["verbose"] is True
+
+    @patch("src.evaluator.evaluate_model")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_evaluate_parallel(self, mock_key, mock_client_cls, mock_eval, runner):
+        mock_eval.return_value = [{"checkpoints": {6: {}, 12: {}}}]
+        result = runner.invoke(
+            cli,
+            ["evaluate", "--models", "test/a,test/b", "--parallel", "2"],
+        )
+        assert result.exit_code == 0
+        assert "Parallel workers: 2" in result.output
+        assert mock_eval.call_count == 2
+
+    @patch("src.evaluator.evaluate_model")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_evaluate_parallel_with_error(self, mock_key, mock_client_cls, mock_eval, runner):
+        mock_eval.side_effect = RuntimeError("eval boom")
+        result = runner.invoke(
+            cli,
+            ["evaluate", "--models", "test/a,test/b", "--parallel", "2"],
+        )
+        assert result.exit_code == 0
+        assert "failed" in result.output.lower()
+
+
+class TestRunSingleModel:
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    def test_success(self, mock_client_cls, mock_run):
+        mock_run.return_value = [{"status": "completed"}, {"status": "cached"}]
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+        result = _run_single_model("sk-test", cfg, 2, 10, 60.0, False)
+        assert isinstance(result, _ModelRunResult)
+        assert result.completed == 2
+        assert result.error is None
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    def test_error(self, mock_client_cls, mock_run):
+        mock_run.side_effect = RuntimeError("boom")
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+        result = _run_single_model("sk-test", cfg, 1, 10, 60.0, False)
+        assert result.error is not None
+
+
+class TestEvalSingleModel:
+    @patch("src.evaluator.evaluate_model")
+    @patch("src.openrouter_client.OpenRouterClient")
+    def test_success(self, mock_client_cls, mock_eval):
+        mock_eval.return_value = [{"checkpoints": {6: {}, 12: {}}}]
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+        result = _eval_single_model("sk-test", cfg, 60.0, False)
+        assert isinstance(result, _ModelEvalResult)
+        assert result.n_checkpoints == 2
+        assert result.error is None
+
+    @patch("src.evaluator.evaluate_model")
+    @patch("src.openrouter_client.OpenRouterClient")
+    def test_error(self, mock_client_cls, mock_eval):
+        mock_eval.side_effect = RuntimeError("eval fail")
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+        result = _eval_single_model("sk-test", cfg, 60.0, False)
+        assert result.error is not None

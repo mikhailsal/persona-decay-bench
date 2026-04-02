@@ -12,6 +12,7 @@ from src.runner import (
     _collect_self_report,
     _generate_conversation_id,
     _inject_explicit_cache_breakpoint,
+    _print_turn_with_cache,
     run_conversation,
 )
 
@@ -389,3 +390,69 @@ class TestRunConversation:
         assert len(result["turns"]) == 2 + 2 * 4
         exchanges = [t.get("exchange") for t in result["turns"] if t.get("exchange") is not None]
         assert max(exchanges) == 4
+
+
+class TestPrintTurnVerbose:
+    def test_verbose_false_truncates(self, capsys):
+        content = "A" * 200
+        _print_turn_with_cache(
+            "Turn  1",
+            "participant",
+            content,
+            100,
+            0,
+            0,
+            verbose=False,
+        )
+        captured = capsys.readouterr().out
+        assert "..." in captured
+        assert "A" * 200 not in captured
+
+    def test_verbose_true_shows_full_content(self, capsys):
+        content = "A" * 200
+        _print_turn_with_cache(
+            "Turn  1",
+            "participant",
+            content,
+            100,
+            0,
+            0,
+            verbose=True,
+        )
+        captured = capsys.readouterr().out
+        assert "participant" in captured.lower()
+        assert "..." not in captured.split("\n")[0]
+
+    def test_verbose_short_content_no_panel(self, capsys):
+        content = "Short reply"
+        _print_turn_with_cache(
+            "Turn  1",
+            "participant",
+            content,
+            50,
+            0,
+            0,
+            verbose=True,
+        )
+        captured = capsys.readouterr().out
+        assert "Short reply" in captured
+
+    @patch("src.runner.append_turn")
+    @patch("src.runner.save_checkpoint")
+    @patch("src.runner.conversation_exists", return_value=False)
+    def test_run_conversation_verbose_param(self, mock_exists, mock_save_cp, mock_append):
+        client = MagicMock()
+        client.chat.return_value = _make_result("Model response")
+
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+
+        result = run_conversation(
+            client=client,
+            model_config=cfg,
+            run_number=1,
+            conversation_id="verb-conv",
+            max_turns=2,
+            checkpoint_turns=[],
+            verbose=True,
+        )
+        assert result["status"] == "completed"

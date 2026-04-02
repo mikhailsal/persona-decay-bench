@@ -115,4 +115,4 @@ class TestEvaluateWithError:
         mock_eval.side_effect = RuntimeError("Eval error")
         result = runner.invoke(cli, ["evaluate", "--models", "test/model"])
         assert result.exit_code == 0
-        assert "Error" in result.output
+        assert "ERROR" in result.output

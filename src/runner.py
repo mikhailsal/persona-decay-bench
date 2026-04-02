@@ -53,8 +53,15 @@ def _print_turn_with_cache(
     prompt_tokens: int,
     cached_tokens: int,
     cache_write_tokens: int,
+    *,
+    verbose: bool = False,
 ) -> None:
-    """Print a turn line with cache status."""
+    """Print a turn line with cache status.
+
+    When *verbose* is True the full response text is displayed in a
+    Rich panel below the summary line so the user can read model output
+    in real time.
+    """
     cache_info = ""
     if cached_tokens > 0:
         pct = (cached_tokens / prompt_tokens * 100) if prompt_tokens else 0
@@ -63,7 +70,14 @@ def _print_turn_with_cache(
         cache_info = f" [yellow]CACHE WRITE {cache_write_tokens} tokens[/yellow]"
     elif prompt_tokens > 0:
         cache_info = f" [dim]no cache ({prompt_tokens} prompt tokens)[/dim]"
-    console.print(f"    {label} [{role:11s}]: {content[:70]}...{cache_info}")
+
+    preview = content if verbose else f"{content[:70]}..."
+    console.print(f"    {label} [{role:11s}]: {preview}{cache_info}")
+
+    if verbose and len(content) > 70:
+        from rich.panel import Panel
+
+        console.print(Panel(content, title=f"{role}", border_style="dim", expand=False, width=100))
 
 
 def _generate_conversation_id() -> str:
@@ -286,6 +300,8 @@ def _run_exchange_loop(
     conv_id: str,
     max_turns: int,
     checkpoints: list[int],
+    *,
+    verbose: bool = False,
 ) -> float:
     """Run the partner/participant exchange loop. Returns total cost accumulated."""
     total_cost = 0.0
@@ -309,6 +325,7 @@ def _run_exchange_loop(
             partner_result.usage.prompt_tokens,
             partner_result.usage.cached_tokens,
             partner_result.usage.cache_write_tokens,
+            verbose=verbose,
         )
         msg_number += 1
 
@@ -332,6 +349,7 @@ def _run_exchange_loop(
             target_result.usage.prompt_tokens,
             target_result.usage.cached_tokens,
             target_result.usage.cache_write_tokens,
+            verbose=verbose,
         )
         msg_number += 1
 
@@ -350,6 +368,16 @@ def _run_exchange_loop(
     return total_cost
 
 
+def _make_task_turn() -> dict[str, Any]:
+    """Build the initial task turn that kicks off the conversation."""
+    return {
+        "turn": 0,
+        "role": "task",
+        "content": WORKDAY_TASK,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 def run_conversation(
     client: OpenRouterClient,
     model_config: ModelConfig,
@@ -358,6 +386,7 @@ def run_conversation(
     *,
     max_turns: int = MAX_TURNS,
     checkpoint_turns: list[int] | None = None,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Run a single multi-turn persona conversation."""
     config_dir = model_config.config_dir_name
@@ -373,12 +402,7 @@ def run_conversation(
         Text(f"\n  [{model_config.label}] Starting conversation {conv_id} (run {run_number})", style="bold cyan")
     )
 
-    task_turn: dict[str, Any] = {
-        "turn": 0,
-        "role": "task",
-        "content": WORKDAY_TASK,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    task_turn = _make_task_turn()
     turns.append(task_turn)
     append_turn(config_dir, run_number, conv_id, task_turn)
 
@@ -401,6 +425,7 @@ def run_conversation(
         result.usage.prompt_tokens,
         result.usage.cached_tokens,
         result.usage.cache_write_tokens,
+        verbose=verbose,
     )
 
     loop_cost = _run_exchange_loop(
@@ -412,6 +437,7 @@ def run_conversation(
         conv_id,
         max_turns,
         checkpoints,
+        verbose=verbose,
     )
     total_cost_usd = result.usage.cost_usd + loop_cost
 
@@ -438,6 +464,7 @@ def run_all_conversations(
     n_runs: int = 5,
     max_turns: int = MAX_TURNS,
     checkpoint_turns: list[int] | None = None,
+    verbose: bool = False,
 ) -> list[dict[str, Any]]:
     """Run all conversations for a model (n_runs conversations).
 
@@ -453,6 +480,7 @@ def run_all_conversations(
             conversation_id=conv_id,
             max_turns=max_turns,
             checkpoint_turns=checkpoint_turns,
+            verbose=verbose,
         )
         results.append(result)
     return results

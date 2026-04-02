@@ -140,8 +140,15 @@ def _run_single_observer_call(
     client: OpenRouterClient,
     observer_prompt: str,
     call_idx: int,
+    *,
+    verbose: bool = False,
 ) -> tuple[dict[str, Any], float]:
     """Execute one observer call and return (rating_entry, cost)."""
+    from rich.console import Console as _Console
+    from rich.panel import Panel
+
+    _con = _Console()
+
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": "You are an expert behavioral psychologist trained in ADHD assessment."},
         {
@@ -171,6 +178,19 @@ def _run_single_observer_call(
         entry["items"] = {}
         entry["total_score"] = 0
         entry["parse_error"] = True
+
+    if verbose:
+        total = entry.get("total_score", 0)
+        _con.print(
+            Panel(
+                result.content,
+                title=f"Observer #{call_idx + 1} — total={total}",
+                border_style="cyan",
+                expand=False,
+                width=100,
+            )
+        )
+
     return entry, result.usage.cost_usd
 
 
@@ -180,6 +200,7 @@ def run_observer_assessment(
     up_to_turn: int,
     *,
     n_calls: int = OBSERVER_CALLS,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Run observer assessment using multiple independent evaluator calls."""
     observer_prompt = _filter_turns_for_observer(conversation_turns, up_to_turn)
@@ -187,7 +208,7 @@ def run_observer_assessment(
     ratings: list[dict[str, Any]] = []
     total_cost = 0.0
     for call_idx in range(n_calls):
-        entry, cost = _run_single_observer_call(client, observer_prompt, call_idx)
+        entry, cost = _run_single_observer_call(client, observer_prompt, call_idx, verbose=verbose)
         ratings.append(entry)
         total_cost += cost
 
@@ -255,6 +276,8 @@ def evaluate_checkpoint(
     run_number: int,
     conversation_id: str,
     turn: int,
+    *,
+    verbose: bool = False,
 ) -> dict[str, Any]:
     """Run full evaluation (self-report extraction + observer assessment) for a checkpoint.
 
@@ -275,7 +298,7 @@ def evaluate_checkpoint(
 
     # Run observer assessment if not already done
     if "observer_ratings" not in checkpoint or not checkpoint["observer_ratings"]:
-        observer_data = run_observer_assessment(client, conversation_turns, turn)
+        observer_data = run_observer_assessment(client, conversation_turns, turn, verbose=verbose)
         save_observer_scores(config_dir, run_number, conversation_id, turn, observer_data)
     else:
         observer_data = {
@@ -312,6 +335,7 @@ def evaluate_model(
     model_config: ModelConfig,
     *,
     runs: list[int] | None = None,
+    verbose: bool = False,
 ) -> list[dict[str, Any]]:
     """Run observer evaluation for all conversations and checkpoints of a model.
 
@@ -343,6 +367,7 @@ def evaluate_model(
                     run_num,
                     conv_id,
                     turn,
+                    verbose=verbose,
                 )
                 conv_results["checkpoints"][turn] = result
 

@@ -418,3 +418,42 @@ class TestEvaluateCheckpoint:
         cfg = ModelConfig(model_id="test/model")
         result = evaluate_checkpoint(client, cfg, 1, "conv001", 6)
         assert "error" in result
+
+
+class TestVerboseMode:
+    def test_observer_call_verbose(self):
+        from src.evaluator import _run_single_observer_call
+        from src.openrouter_client import CompletionResult, UsageInfo
+
+        client = MagicMock()
+        client.chat.return_value = CompletionResult(
+            content='{"IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 2, '
+            '"HY-1": 3, "HY-2": 1, "HY-3": 2, "HY-4": 2, '
+            '"IM-1": 3, "IM-2": 2, "SC-1": 1, "SC-2": 2}',
+            usage=UsageInfo(cost_usd=0.01),
+            model="observer",
+            finish_reason="stop",
+        )
+        entry, _cost = _run_single_observer_call(client, "prompt", 0, verbose=True)
+        assert entry["total_score"] > 0
+
+    def test_run_observer_assessment_verbose(self):
+        from src.openrouter_client import CompletionResult, UsageInfo
+
+        client = MagicMock()
+        client.chat.return_value = CompletionResult(
+            content='{"IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 2, '
+            '"HY-1": 3, "HY-2": 1, "HY-3": 2, "HY-4": 2, '
+            '"IM-1": 3, "IM-2": 2, "SC-1": 1, "SC-2": 2}',
+            usage=UsageInfo(cost_usd=0.01),
+            model="observer",
+            finish_reason="stop",
+        )
+        result = run_observer_assessment(
+            client,
+            [{"role": "participant", "content": "Hello", "exchange": 1}],
+            6,
+            n_calls=1,
+            verbose=True,
+        )
+        assert result["observer_mean"] > 0
