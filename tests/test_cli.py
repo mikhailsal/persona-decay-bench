@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
-from src.cli import cli, _resolve_models
+from src.cli import _resolve_models, cli
 from src.config import MODEL_CONFIGS, ModelConfig
 
 
@@ -35,6 +35,7 @@ class TestResolveModels:
 
     def test_none_returns_active(self):
         from src.config import register_config
+
         cfg = ModelConfig(model_id="test/active-model", display_label="test-active", active=True)
         register_config(cfg)
         configs = _resolve_models(None)

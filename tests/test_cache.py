@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -227,13 +225,25 @@ class TestCrossModelCachePaths:
 
 class TestCostAggregation:
     def test_sum_run_total_cost(self, cache_dir):
-        save_checkpoint("model@low-t0.7", 1, "conv001", 6, {
-            "self_report_cost": {"cost_usd": 0.01},
-            "observer_cost": {"cost_usd": 0.05},
-        })
-        save_checkpoint("model@low-t0.7", 1, "conv001", 12, {
-            "self_report_cost": {"cost_usd": 0.02},
-        })
+        save_checkpoint(
+            "model@low-t0.7",
+            1,
+            "conv001",
+            6,
+            {
+                "self_report_cost": {"cost_usd": 0.01},
+                "observer_cost": {"cost_usd": 0.05},
+            },
+        )
+        save_checkpoint(
+            "model@low-t0.7",
+            1,
+            "conv001",
+            12,
+            {
+                "self_report_cost": {"cost_usd": 0.02},
+            },
+        )
 
         total = sum_run_total_cost_usd("model@low-t0.7", 1)
         assert abs(total - 0.08) < 1e-9
@@ -255,12 +265,18 @@ class TestCacheClearing:
         assert clear_all_cache() == 0
 
     def test_clear_observer_scores(self, cache_dir):
-        save_checkpoint("model@low-t0.7", 1, "conv001", 6, {
-            "self_report": {"total_score": 20},
-            "observer_ratings": [{"total_score": 18}],
-            "observer_mean": 18.0,
-            "observer_sd": 1.0,
-        })
+        save_checkpoint(
+            "model@low-t0.7",
+            1,
+            "conv001",
+            6,
+            {
+                "self_report": {"total_score": 20},
+                "observer_ratings": [{"total_score": 18}],
+                "observer_mean": 18.0,
+                "observer_sd": 1.0,
+            },
+        )
 
         count = clear_observer_scores()
         assert count == 1

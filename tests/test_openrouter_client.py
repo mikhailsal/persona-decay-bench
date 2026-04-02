@@ -5,9 +5,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.config import ModelPricing
 from src.openrouter_client import (
     CompletionResult,
     OpenRouterClient,
@@ -138,7 +135,8 @@ class TestOpenRouterClient:
         good_response = _make_mock_response(content="Got it", cost=0.01)
 
         self.client._client.chat.completions.create.side_effect = [
-            empty_response, good_response,
+            empty_response,
+            good_response,
         ]
 
         result = self.client.chat("test/model", [{"role": "user", "content": "hi"}])

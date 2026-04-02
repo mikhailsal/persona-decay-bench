@@ -1,0 +1,48 @@
+repos:
+  # ── General ─────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-added-large-files
+        args: ['--maxkb=500']
+      - id: check-merge-conflict
+
+  # ── Python (Ruff) ──────────────────────────────────────────────────
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: [--fix]
+      - id: ruff-format
+
+  # ── Mypy ───────────────────────────────────────────────────────────
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.13.0
+    hooks:
+      - id: mypy
+        files: ^src/
+        additional_dependencies:
+          - click>=8.1.0
+          - rich>=13.0.0
+          - pyyaml>=6.0
+          - types-pyyaml>=6.0.12
+          - types-requests>=2.31.0
+          - numpy>=1.26.0
+
+  # ── Local hooks ────────────────────────────────────────────────────
+  - repo: local
+    hooks:
+      - id: code-limits
+        name: code limits
+        entry: python scripts/check_code_limits.py
+        language: system
+        pass_filenames: false
+      - id: backend-coverage
+        name: tests + coverage >= 95%
+        entry: bash -c 'python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=95'
+        language: system
+        pass_filenames: false
+        always_run: true

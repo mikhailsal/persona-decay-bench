@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
 from rich.text import Text
@@ -22,7 +22,6 @@ from src.cache import (
     conversation_exists,
     load_conversation,
     save_checkpoint,
-    save_conversation,
 )
 from src.config import (
     CHECKPOINT_TURNS,
@@ -31,16 +30,17 @@ from src.config import (
     PARTNER_MODEL,
     PARTNER_TEMPERATURE,
     RESPONSE_MAX_TOKENS,
-    SELF_REPORT_MAX_TOKENS,
     ModelConfig,
 )
-from src.openrouter_client import CompletionResult, OpenRouterClient
 from src.prompts import (
     HIGH_ADHD_PERSONA,
     PARTNER_SYSTEM_PROMPT,
     WORKDAY_TASK,
     build_self_report_prompt,
 )
+
+if TYPE_CHECKING:
+    from src.openrouter_client import CompletionResult, OpenRouterClient
 
 log = logging.getLogger(__name__)
 console = Console()
@@ -98,9 +98,7 @@ def _build_target_messages(
             elif turn.get("reasoning_content"):
                 msg["reasoning"] = turn["reasoning_content"]
             messages.append(msg)
-        elif role == "partner":
-            messages.append({"role": "user", "content": content})
-        elif role == "task":
+        elif role == "partner" or role == "task":
             messages.append({"role": "user", "content": content})
 
     return messages
@@ -179,10 +177,12 @@ def _collect_self_report(
     """
     target_messages = _build_target_messages(turns)
     _inject_explicit_cache_breakpoint(target_messages)
-    target_messages.append({
-        "role": "user",
-        "content": build_self_report_prompt(),
-    })
+    target_messages.append(
+        {
+            "role": "user",
+            "content": build_self_report_prompt(),
+        }
+    )
 
     # Use the same temperature and max_tokens as conversation turns so the
     # prompt cache entry written by the preceding turn can be reused.
@@ -209,79 +209,15 @@ def _collect_self_report(
     }
 
 
-def run_conversation(
-    client: OpenRouterClient,
-    model_config: ModelConfig,
-    run_number: int,
-    conversation_id: str | None = None,
-    *,
-    max_turns: int = MAX_TURNS,
-    checkpoint_turns: list[int] | None = None,
+def _build_participant_turn(
+    result: CompletionResult,
+    msg_number: int,
+    exchange: int,
 ) -> dict[str, Any]:
-    """Run a single multi-turn persona conversation.
-
-    Args:
-        client: OpenRouter API client.
-        model_config: Target model configuration.
-        run_number: Run number for cache path.
-        conversation_id: Optional conversation ID (auto-generated if None).
-        max_turns: Maximum number of conversation turns.
-        checkpoint_turns: Turn numbers at which to collect self-reports.
-
-    Returns:
-        Dict with conversation metadata, turns, and checkpoint data.
-    """
-    config_dir = model_config.config_dir_name
-    conv_id = conversation_id or _generate_conversation_id()
-    checkpoints = checkpoint_turns or CHECKPOINT_TURNS
-
-    # A complete conversation has: 1 task + 1 initial response + 2 * max_turns exchanges
-    expected_messages = 2 + 2 * max_turns
-    if conversation_exists(config_dir, run_number, conv_id):
-        existing_turns = load_conversation(config_dir, run_number, conv_id)
-        if existing_turns and len(existing_turns) >= expected_messages:
-            log.info("Conversation %s already complete (%d messages)", conv_id, len(existing_turns))
-            return {
-                "conversation_id": conv_id,
-                "model_config": model_config,
-                "run": run_number,
-                "turns": existing_turns,
-                "status": "cached",
-            }
-
-    turns: list[dict[str, Any]] = []
-    total_cost_usd = 0.0
-
-    console.print(
-        Text(f"\n  [{model_config.label}] Starting conversation {conv_id} (run {run_number})", style="bold cyan")
-    )
-
-    # Turn 0: inject workday task
-    task_turn = {
-        "turn": 0,
-        "role": "task",
-        "content": WORKDAY_TASK,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
-    turns.append(task_turn)
-    append_turn(config_dir, run_number, conv_id, task_turn)
-
-    # Turn 1: target model responds to workday task
-    target_messages = _build_target_messages(turns)
-    result = client.chat(
-        model=model_config.model_id,
-        messages=target_messages,
-        max_tokens=RESPONSE_MAX_TOKENS,
-        temperature=model_config.effective_temperature,
-        reasoning_effort=model_config.effective_reasoning,
-        provider=model_config.provider,
-        cache_control=True,
-    )
-    total_cost_usd += result.usage.cost_usd
-
-    participant_turn: dict[str, Any] = {
-        "turn": 1,
-        "exchange": 0,
+    """Build a participant turn dict from a completion result."""
+    turn_data: dict[str, Any] = {
+        "turn": msg_number,
+        "exchange": exchange,
         "role": "participant",
         "content": result.content,
         "cost_usd": result.usage.cost_usd,
@@ -292,94 +228,117 @@ def run_conversation(
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if result.reasoning_details:
-        participant_turn["reasoning_details"] = result.reasoning_details
+        turn_data["reasoning_details"] = result.reasoning_details
     elif result.reasoning_content:
-        participant_turn["reasoning_content"] = result.reasoning_content
-    turns.append(participant_turn)
-    append_turn(config_dir, run_number, conv_id, participant_turn)
-    _print_turn_with_cache(
-        "Init  ", "participant", result.content, result.usage.prompt_tokens,
-        result.usage.cached_tokens, result.usage.cache_write_tokens,
-    )
+        turn_data["reasoning_content"] = result.reasoning_content
+    return turn_data
 
-    msg_number = 2  # sequential message counter (0=task, 1=first participant)
-    exchange_round = 1  # counts complete partner+participant exchanges
-    while exchange_round <= max_turns:
-        # Partner generates a follow-up question
-        partner_messages = _build_partner_messages(turns)
+
+def _build_partner_turn(
+    result: CompletionResult,
+    msg_number: int,
+    exchange: int,
+) -> dict[str, Any]:
+    """Build a partner turn dict from a completion result."""
+    return {
+        "turn": msg_number,
+        "exchange": exchange,
+        "role": "partner",
+        "content": result.content,
+        "cost_usd": result.usage.cost_usd,
+        "prompt_tokens": result.usage.prompt_tokens,
+        "cached_tokens": result.usage.cached_tokens,
+        "cache_write_tokens": result.usage.cache_write_tokens,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def _check_cached_conversation(
+    config_dir: str,
+    run_number: int,
+    conv_id: str,
+    model_config: ModelConfig,
+    max_turns: int,
+) -> dict[str, Any] | None:
+    """Return a cached result dict if the conversation is already complete."""
+    expected_messages = 2 + 2 * max_turns
+    if not conversation_exists(config_dir, run_number, conv_id):
+        return None
+    existing_turns = load_conversation(config_dir, run_number, conv_id)
+    if not existing_turns or len(existing_turns) < expected_messages:
+        return None
+    log.info("Conversation %s already complete (%d messages)", conv_id, len(existing_turns))
+    return {
+        "conversation_id": conv_id,
+        "model_config": model_config,
+        "run": run_number,
+        "turns": existing_turns,
+        "status": "cached",
+    }
+
+
+def _run_exchange_loop(
+    client: OpenRouterClient,
+    model_config: ModelConfig,
+    turns: list[dict[str, Any]],
+    config_dir: str,
+    run_number: int,
+    conv_id: str,
+    max_turns: int,
+    checkpoints: list[int],
+) -> float:
+    """Run the partner/participant exchange loop. Returns total cost accumulated."""
+    total_cost = 0.0
+    msg_number = 2
+    for exchange_round in range(1, max_turns + 1):
         partner_result = client.chat(
             model=PARTNER_MODEL,
-            messages=partner_messages,
+            messages=_build_partner_messages(turns),
             max_tokens=PARTNER_MAX_TOKENS,
             temperature=PARTNER_TEMPERATURE,
             cache_control=True,
         )
-        total_cost_usd += partner_result.usage.cost_usd
-
-        partner_turn_data: dict[str, Any] = {
-            "turn": msg_number,
-            "exchange": exchange_round,
-            "role": "partner",
-            "content": partner_result.content,
-            "cost_usd": partner_result.usage.cost_usd,
-            "prompt_tokens": partner_result.usage.prompt_tokens,
-            "cached_tokens": partner_result.usage.cached_tokens,
-            "cache_write_tokens": partner_result.usage.cache_write_tokens,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        turns.append(partner_turn_data)
-        append_turn(config_dir, run_number, conv_id, partner_turn_data)
+        total_cost += partner_result.usage.cost_usd
+        partner_turn = _build_partner_turn(partner_result, msg_number, exchange_round)
+        turns.append(partner_turn)
+        append_turn(config_dir, run_number, conv_id, partner_turn)
         _print_turn_with_cache(
-            f"Turn {exchange_round:2d}", "partner", partner_result.content,
-            partner_result.usage.prompt_tokens, partner_result.usage.cached_tokens,
+            f"Turn {exchange_round:2d}",
+            "partner",
+            partner_result.content,
+            partner_result.usage.prompt_tokens,
+            partner_result.usage.cached_tokens,
             partner_result.usage.cache_write_tokens,
         )
         msg_number += 1
 
-        # Target model responds
-        target_messages = _build_target_messages(turns)
         target_result = client.chat(
             model=model_config.model_id,
-            messages=target_messages,
+            messages=_build_target_messages(turns),
             max_tokens=RESPONSE_MAX_TOKENS,
             temperature=model_config.effective_temperature,
             reasoning_effort=model_config.effective_reasoning,
             provider=model_config.provider,
             cache_control=True,
         )
-        total_cost_usd += target_result.usage.cost_usd
-
-        participant_turn_data: dict[str, Any] = {
-            "turn": msg_number,
-            "exchange": exchange_round,
-            "role": "participant",
-            "content": target_result.content,
-            "cost_usd": target_result.usage.cost_usd,
-            "tokens": target_result.usage.prompt_tokens + target_result.usage.completion_tokens,
-            "prompt_tokens": target_result.usage.prompt_tokens,
-            "cached_tokens": target_result.usage.cached_tokens,
-            "cache_write_tokens": target_result.usage.cache_write_tokens,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        if target_result.reasoning_details:
-            participant_turn_data["reasoning_details"] = target_result.reasoning_details
-        elif target_result.reasoning_content:
-            participant_turn_data["reasoning_content"] = target_result.reasoning_content
-        turns.append(participant_turn_data)
-        append_turn(config_dir, run_number, conv_id, participant_turn_data)
+        total_cost += target_result.usage.cost_usd
+        pturn = _build_participant_turn(target_result, msg_number, exchange_round)
+        turns.append(pturn)
+        append_turn(config_dir, run_number, conv_id, pturn)
         _print_turn_with_cache(
-            f"Turn {exchange_round:2d}", "participant", target_result.content,
-            target_result.usage.prompt_tokens, target_result.usage.cached_tokens,
+            f"Turn {exchange_round:2d}",
+            "participant",
+            target_result.content,
+            target_result.usage.prompt_tokens,
+            target_result.usage.cached_tokens,
             target_result.usage.cache_write_tokens,
         )
         msg_number += 1
 
-        # Checkpoint: collect self-report at designated exchange rounds
         if exchange_round in checkpoints:
             console.print(f"    ── Checkpoint at exchange {exchange_round} ──")
             sr_data = _collect_self_report(client, model_config, turns, exchange_round)
-            total_cost_usd += sr_data["cost"]["cost_usd"]
-
+            total_cost += sr_data["cost"]["cost_usd"]
             checkpoint_data = {
                 "turn": exchange_round,
                 "self_report": sr_data,
@@ -388,13 +347,80 @@ def run_conversation(
             save_checkpoint(config_dir, run_number, conv_id, exchange_round, checkpoint_data)
             console.print(f"    ── Self-report collected (${sr_data['cost']['cost_usd']:.4f}) ──")
 
-        exchange_round += 1
+    return total_cost
 
+
+def run_conversation(
+    client: OpenRouterClient,
+    model_config: ModelConfig,
+    run_number: int,
+    conversation_id: str | None = None,
+    *,
+    max_turns: int = MAX_TURNS,
+    checkpoint_turns: list[int] | None = None,
+) -> dict[str, Any]:
+    """Run a single multi-turn persona conversation."""
+    config_dir = model_config.config_dir_name
+    conv_id = conversation_id or _generate_conversation_id()
+    checkpoints = checkpoint_turns or CHECKPOINT_TURNS
+
+    cached = _check_cached_conversation(config_dir, run_number, conv_id, model_config, max_turns)
+    if cached is not None:
+        return cached
+
+    turns: list[dict[str, Any]] = []
     console.print(
-        Text(f"  [{model_config.label}] Conversation {conv_id} complete. "
-             f"Total cost: ${total_cost_usd:.4f}", style="green")
+        Text(f"\n  [{model_config.label}] Starting conversation {conv_id} (run {run_number})", style="bold cyan")
     )
 
+    task_turn: dict[str, Any] = {
+        "turn": 0,
+        "role": "task",
+        "content": WORKDAY_TASK,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+    turns.append(task_turn)
+    append_turn(config_dir, run_number, conv_id, task_turn)
+
+    result = client.chat(
+        model=model_config.model_id,
+        messages=_build_target_messages(turns),
+        max_tokens=RESPONSE_MAX_TOKENS,
+        temperature=model_config.effective_temperature,
+        reasoning_effort=model_config.effective_reasoning,
+        provider=model_config.provider,
+        cache_control=True,
+    )
+    initial_turn = _build_participant_turn(result, 1, 0)
+    turns.append(initial_turn)
+    append_turn(config_dir, run_number, conv_id, initial_turn)
+    _print_turn_with_cache(
+        "Init  ",
+        "participant",
+        result.content,
+        result.usage.prompt_tokens,
+        result.usage.cached_tokens,
+        result.usage.cache_write_tokens,
+    )
+
+    loop_cost = _run_exchange_loop(
+        client,
+        model_config,
+        turns,
+        config_dir,
+        run_number,
+        conv_id,
+        max_turns,
+        checkpoints,
+    )
+    total_cost_usd = result.usage.cost_usd + loop_cost
+
+    console.print(
+        Text(
+            f"  [{model_config.label}] Conversation {conv_id} complete. Total cost: ${total_cost_usd:.4f}",
+            style="green",
+        )
+    )
     return {
         "conversation_id": conv_id,
         "model_config": model_config,

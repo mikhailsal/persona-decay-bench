@@ -11,13 +11,16 @@ Cache structure:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from src.config import CACHE_DIR, CHECKPOINT_TURNS, model_id_to_slug
+from src.config import CACHE_DIR
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _conversation_dir(
@@ -52,6 +55,7 @@ def _checkpoint_path(
 # Conversation JSONL
 # ---------------------------------------------------------------------------
 
+
 def append_turn(
     config_dir_name: str,
     run: int,
@@ -61,7 +65,7 @@ def append_turn(
     """Append a single turn to the conversation JSONL file."""
     path = _conversation_path(config_dir_name, run, conversation_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
+    with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(turn_data, ensure_ascii=False) + "\n")
     return path
 
@@ -95,7 +99,7 @@ def save_conversation(
     """Save a full conversation (overwriting any existing JSONL)."""
     path = _conversation_path(config_dir_name, run, conversation_id)
     path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "w", encoding="utf-8") as f:
+    with path.open("w", encoding="utf-8") as f:
         for turn in turns:
             f.write(json.dumps(turn, ensure_ascii=False) + "\n")
     return path
@@ -114,6 +118,7 @@ def conversation_exists(
 # ---------------------------------------------------------------------------
 # Checkpoint JSON
 # ---------------------------------------------------------------------------
+
 
 def save_checkpoint(
     config_dir_name: str,
@@ -146,9 +151,10 @@ def load_checkpoint(
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        result: dict[str, Any] = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
+    return result
 
 
 def checkpoint_exists(
@@ -212,6 +218,7 @@ def save_observer_scores(
 # Discovery
 # ---------------------------------------------------------------------------
 
+
 def list_available_runs(config_dir_name: str) -> list[int]:
     """List all run numbers for a config."""
     model_dir = CACHE_DIR / config_dir_name
@@ -234,25 +241,20 @@ def list_conversations(
     high_dir = CACHE_DIR / config_dir_name / f"run_{run}" / "high"
     if not high_dir.exists():
         return []
-    return sorted(
-        d.name for d in high_dir.iterdir()
-        if d.is_dir() and (d / "conversation.jsonl").exists()
-    )
+    return sorted(d.name for d in high_dir.iterdir() if d.is_dir() and (d / "conversation.jsonl").exists())
 
 
 def list_all_cached_models() -> list[str]:
     """List all config dir names that have cached data."""
     if not CACHE_DIR.exists():
         return []
-    return sorted(
-        d.name for d in CACHE_DIR.iterdir()
-        if d.is_dir() and "@" in d.name
-    )
+    return sorted(d.name for d in CACHE_DIR.iterdir() if d.is_dir() and "@" in d.name)
 
 
 # ---------------------------------------------------------------------------
 # Cost aggregation
 # ---------------------------------------------------------------------------
+
 
 def sum_run_total_cost_usd(config_dir_name: str, run: int = 1) -> float:
     """Sum all costs in checkpoint files for a run."""
@@ -279,6 +281,7 @@ def sum_run_total_cost_usd(config_dir_name: str, run: int = 1) -> float:
 # Cache clearing
 # ---------------------------------------------------------------------------
 
+
 def clear_all_cache() -> int:
     """Clear all cached data. Returns number of files removed."""
     if not CACHE_DIR.exists():
@@ -290,10 +293,8 @@ def clear_all_cache() -> int:
             count += 1
     for d in sorted(CACHE_DIR.rglob("*"), reverse=True):
         if d.is_dir():
-            try:
+            with contextlib.suppress(OSError):
                 d.rmdir()
-            except OSError:
-                pass
     return count
 
 

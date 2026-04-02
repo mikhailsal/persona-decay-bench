@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.config import ModelConfig
 from src.evaluator import (
     _validate_scores,
@@ -15,13 +13,28 @@ from src.evaluator import (
 )
 from src.openrouter_client import CompletionResult, UsageInfo
 
+_ALL_ITEM_IDS = ["IN-1", "IN-2", "IN-3", "IN-4", "HY-1", "HY-2", "HY-3", "HY-4", "IM-1", "IM-2", "IM-3", "IM-4"]
+
+
+def _make_all_scores(val: int) -> str:
+    return json.dumps(dict.fromkeys(_ALL_ITEM_IDS, val))
+
 
 class TestValidateScores:
     def test_valid_full(self):
         data = {
-            "IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 0,
-            "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 0,
-            "IM-1": 3, "IM-2": 2, "IM-3": 1, "IM-4": 0,
+            "IN-1": 3,
+            "IN-2": 2,
+            "IN-3": 1,
+            "IN-4": 0,
+            "HY-1": 3,
+            "HY-2": 2,
+            "HY-3": 1,
+            "HY-4": 0,
+            "IM-1": 3,
+            "IM-2": 2,
+            "IM-3": 1,
+            "IM-4": 0,
         }
         result = _validate_scores(data)
         assert result is not None
@@ -29,8 +42,13 @@ class TestValidateScores:
 
     def test_partial_scores(self):
         data = {
-            "IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 0,
-            "HY-1": 3, "HY-2": 2, "HY-3": 1,
+            "IN-1": 3,
+            "IN-2": 2,
+            "IN-3": 1,
+            "IN-4": 0,
+            "HY-1": 3,
+            "HY-2": 2,
+            "HY-3": 1,
         }
         result = _validate_scores(data)
         assert result is not None
@@ -43,9 +61,18 @@ class TestValidateScores:
 
     def test_non_numeric_values_skipped(self):
         data = {
-            "IN-1": "high", "IN-2": 2, "IN-3": 1, "IN-4": 0,
-            "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 0,
-            "IM-1": 3, "IM-2": 2, "IM-3": 1, "IM-4": 0,
+            "IN-1": "high",
+            "IN-2": 2,
+            "IN-3": 1,
+            "IN-4": 0,
+            "HY-1": 3,
+            "HY-2": 2,
+            "HY-3": 1,
+            "HY-4": 0,
+            "IM-1": 3,
+            "IM-2": 2,
+            "IM-3": 1,
+            "IM-4": 0,
         }
         result = _validate_scores(data)
         assert result is not None
@@ -55,7 +82,7 @@ class TestValidateScores:
 class TestRunObserverMixed:
     def test_mixed_valid_and_invalid(self):
         client = MagicMock()
-        valid = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+        valid = _make_all_scores(2)
         invalid = "I cannot parse this"
 
         client.chat.side_effect = [
@@ -103,7 +130,7 @@ class TestEvaluateModel:
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
 
         results = evaluate_model(client, cfg, runs=[1, 2])
-        assert len(results) == 4  # 2 runs × 2 conversations
+        assert len(results) == 4  # 2 runs x 2 conversations
 
 
 class TestEvaluateCheckpointCachedObserver:
@@ -112,11 +139,43 @@ class TestEvaluateCheckpointCachedObserver:
     def test_uses_cached_observer(self, mock_load_cp, mock_load_conv):
         mock_load_cp.return_value = {
             "self_report": {
-                "raw_response": '{"IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 0, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 3, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}',
+                "raw_response": _make_all_scores(2),
             },
             "observer_ratings": [
-                {"items": {"IN-1": 2, "IN-2": 2, "IN-3": 1, "IN-4": 1, "HY-1": 2, "HY-2": 1, "HY-3": 1, "HY-4": 1, "IM-1": 1, "IM-2": 1, "IM-3": 2, "IM-4": 1}, "total_score": 16},
-                {"items": {"IN-1": 2, "IN-2": 2, "IN-3": 1, "IN-4": 1, "HY-1": 2, "HY-2": 1, "HY-3": 1, "HY-4": 1, "IM-1": 1, "IM-2": 1, "IM-3": 2, "IM-4": 1}, "total_score": 16},
+                {
+                    "items": {
+                        "IN-1": 2,
+                        "IN-2": 2,
+                        "IN-3": 1,
+                        "IN-4": 1,
+                        "HY-1": 2,
+                        "HY-2": 1,
+                        "HY-3": 1,
+                        "HY-4": 1,
+                        "IM-1": 1,
+                        "IM-2": 1,
+                        "IM-3": 2,
+                        "IM-4": 1,
+                    },
+                    "total_score": 16,
+                },
+                {
+                    "items": {
+                        "IN-1": 2,
+                        "IN-2": 2,
+                        "IN-3": 1,
+                        "IN-4": 1,
+                        "HY-1": 2,
+                        "HY-2": 1,
+                        "HY-3": 1,
+                        "HY-4": 1,
+                        "IM-1": 1,
+                        "IM-2": 1,
+                        "IM-3": 2,
+                        "IM-4": 1,
+                    },
+                    "total_score": 16,
+                },
             ],
             "observer_mean": 16.0,
             "observer_sd": 0.0,
@@ -126,6 +185,7 @@ class TestEvaluateCheckpointCachedObserver:
         ]
 
         from src.evaluator import evaluate_checkpoint
+
         client = MagicMock()
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
 
@@ -143,6 +203,7 @@ class TestEvaluateCheckpointNoConversation:
         }
 
         from src.evaluator import evaluate_checkpoint
+
         client = MagicMock()
         cfg = ModelConfig(model_id="test/model")
         result = evaluate_checkpoint(client, cfg, 1, "conv001", 6)

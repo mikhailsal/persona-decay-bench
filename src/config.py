@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+_log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -57,14 +60,14 @@ API_CALL_TIMEOUT = 60
 REASONING_EFFORT_DEFAULT = "low"
 
 REASONING_EFFORT_BY_PREFIX: dict[str, str] = {
-    "google/gemini-3-pro":   "low",
+    "google/gemini-3-pro": "low",
     "google/gemini-3.1-pro": "low",
-    "google/":      "none",
-    "qwen/":        "none",
-    "openai/":      "low",
-    "anthropic/":   "none",
-    "x-ai/":        "low",
-    "moonshotai/":  "none",
+    "google/": "none",
+    "qwen/": "none",
+    "openai/": "low",
+    "anthropic/": "none",
+    "x-ai/": "low",
+    "moonshotai/": "none",
 }
 
 
@@ -100,6 +103,7 @@ MAX_REASONABLE_GAP = 15.0
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def model_id_to_slug(model_id: str) -> str:
     """Convert 'openai/gpt-5-nano' -> 'openai--gpt-5-nano'."""
     return model_id.replace("/", "--")
@@ -119,6 +123,7 @@ def ensure_dirs() -> None:
 # ---------------------------------------------------------------------------
 # API key
 # ---------------------------------------------------------------------------
+
 
 def _load_env() -> None:
     """Load .env file once (idempotent thanks to dotenv internals)."""
@@ -143,12 +148,12 @@ def load_api_key(*, required: bool = True) -> str:
         key = os.environ.get("OPENROUTER_API_KEY", "").strip()
     placeholder = key in ("", "sk-or-your-key-here")
     if placeholder and required:
-        print(
-            "ERROR: OpenRouter API key is not set.\n"
-            f"  Create a .env file at {ENV_PATH} with:\n"
+        _log.error(
+            "OpenRouter API key is not set.\n"
+            "  Create a .env file at %s with:\n"
             "  OPENROUTER_KEY=your-key-here\n"
             "  Or export OPENROUTER_KEY / OPENROUTER_API_KEY as an environment variable.",
-            file=sys.stderr,
+            ENV_PATH,
         )
         sys.exit(1)
     return key
@@ -158,9 +163,11 @@ def load_api_key(*, required: bool = True) -> str:
 # Model pricing
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ModelPricing:
     """Per-token pricing for a model (in USD)."""
+
     prompt_price: float = 0.0
     completion_price: float = 0.0
 
@@ -168,6 +175,7 @@ class ModelPricing:
 # ---------------------------------------------------------------------------
 # Per-model configuration registry
 # ---------------------------------------------------------------------------
+
 
 def generate_display_label(model_id: str, reasoning: str, temperature: float) -> str:
     """Auto-generate a display label: ``{name}@{reasoning}-t{temp}``."""
@@ -189,6 +197,7 @@ class ModelConfig:
         active: Whether this config should be included in default runs.
         provider: OpenRouter provider slug to pin requests to.
     """
+
     model_id: str
     display_label: str = ""
     temperature: float | None = None
@@ -253,6 +262,7 @@ def get_config_by_dir_name(dir_name: str) -> ModelConfig | None:
 # YAML configuration loader
 # ---------------------------------------------------------------------------
 
+
 def load_model_configs(path: Path | None = None) -> list[ModelConfig]:
     """Load model configurations from a YAML file and register them."""
     import yaml
@@ -274,7 +284,9 @@ def load_model_configs(path: Path | None = None) -> list[ModelConfig]:
         provider = entry.get("provider") or None
 
         label = entry.get("display_label") or generate_display_label(
-            model_id, reasoning, temperature,
+            model_id,
+            reasoning,
+            temperature,
         )
 
         cfg = ModelConfig(

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, ClassVar
 
 import httpx
 import requests
@@ -15,9 +15,8 @@ from src.config import (
     API_CALL_TIMEOUT,
     OPENROUTER_APP_NAME,
     OPENROUTER_APP_URL,
-    get_openrouter_base_url,
-    get_reasoning_effort,
     ModelPricing,
+    get_openrouter_base_url,
 )
 
 log = logging.getLogger(__name__)
@@ -30,6 +29,7 @@ MAX_RETRY_WAIT = 30.0
 @dataclass
 class UsageInfo:
     """Token usage and cost for a single API call."""
+
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
@@ -41,6 +41,7 @@ class UsageInfo:
 @dataclass
 class CompletionResult:
     """Result of a chat completion call."""
+
     content: str = ""
     usage: UsageInfo = field(default_factory=UsageInfo)
     model: str = ""
@@ -55,7 +56,7 @@ def _extract_cost(usage_obj: Any) -> float | None:
     Returns USD cost as float, or None if the field is absent / unparseable.
     """
     raw = getattr(usage_obj, "cost", None)
-    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+    if isinstance(raw, int | float) and not isinstance(raw, bool):
         return float(raw)
     if isinstance(raw, str) and raw.strip():
         try:
@@ -98,10 +99,10 @@ def _usage_from_response(
 class OpenRouterClient:
     """Thin wrapper around the OpenAI SDK pointed at OpenRouter."""
 
-    MAX_RETRIES = 3
-    RETRY_BACKOFF_BASE = 2.0
-    RETRYABLE_STATUS_CODES = {402, 429, 500, 502, 503}
-    EMPTY_CONTENT_RETRIES = 1
+    MAX_RETRIES: int = 3
+    RETRY_BACKOFF_BASE: float = 2.0
+    RETRYABLE_STATUS_CODES: ClassVar[set[int]] = {402, 429, 500, 502, 503}
+    EMPTY_CONTENT_RETRIES: int = 1
 
     def __init__(self, api_key: str, timeout: float = API_CALL_TIMEOUT) -> None:
         self.api_key = api_key
@@ -130,7 +131,8 @@ class OpenRouterClient:
         """
         resp = requests.get(OPENROUTER_PUBLIC_MODELS_URL, timeout=30)
         resp.raise_for_status()
-        return resp.json().get("data", [])
+        result: list[dict[str, Any]] = resp.json().get("data", [])
+        return result
 
     @staticmethod
     def fetch_public_pricing() -> dict[str, ModelPricing]:
@@ -157,9 +159,7 @@ class OpenRouterClient:
             timeout=15,
         )
         resp.raise_for_status()
-        self._known_models = {
-            m.get("id", "") for m in resp.json().get("data", [])
-        }
+        self._known_models = {m.get("id", "") for m in resp.json().get("data", [])}
         return self._known_models
 
     def validate_model(self, model_id: str) -> bool:
@@ -223,9 +223,11 @@ class OpenRouterClient:
                 )
                 log.warning(
                     "%s: empty response (%s, %d tokens), retry %d/%d",
-                    model, reason,
+                    model,
+                    reason,
                     result.usage.completion_tokens,
-                    attempt, self.EMPTY_CONTENT_RETRIES,
+                    attempt,
+                    self.EMPTY_CONTENT_RETRIES,
                 )
                 if result.usage.completion_tokens == 0:
                     time.sleep(2.0 * attempt)
@@ -234,7 +236,7 @@ class OpenRouterClient:
             result.usage = accumulated
             return result
 
-        return result  # type: ignore[possibly-undefined]
+        return result
 
     @staticmethod
     def _resolve_reasoning_effort(override: str | None) -> str | None:
@@ -248,6 +250,63 @@ class OpenRouterClient:
         if override == "auto":
             return None
         return override
+
+    @staticmethod
+    def _build_extra_body(
+        reasoning_effort: str | None,
+        provider: str | None,
+        cache_control: bool,
+    ) -> dict[str, Any] | None:
+        """Build the extra_body dict for the API call."""
+        extra_body: dict[str, Any] | None = None
+        if reasoning_effort:
+            extra_body = {"reasoning": {"effort": reasoning_effort}}
+        if provider:
+            extra_body = extra_body or {}
+            extra_body["provider"] = {"order": [provider], "allow_fallbacks": False}
+        if cache_control:
+            extra_body = extra_body or {}
+            extra_body["cache_control"] = {"type": "ephemeral"}
+        return extra_body
+
+    @staticmethod
+    def _extract_reasoning(response: Any) -> tuple[str | None, list[dict[str, Any]] | None]:
+        """Extract reasoning content and details from a response."""
+        if not response.choices:
+            return None, None
+
+        msg = response.choices[0].message
+        reasoning_content: str | None = None
+
+        raw_reasoning = getattr(msg, "reasoning", None)
+        if raw_reasoning and isinstance(raw_reasoning, str):
+            reasoning_content = raw_reasoning.strip()
+        if not reasoning_content:
+            raw_rc = getattr(msg, "reasoning_content", None)
+            if raw_rc and isinstance(raw_rc, str):
+                reasoning_content = raw_rc.strip()
+
+        reasoning_details: list[dict[str, Any]] | None = None
+        raw_details = getattr(msg, "reasoning_details", None)
+        if raw_details and isinstance(raw_details, list):
+            reasoning_details = [
+                d if isinstance(d, dict) else (d.__dict__ if hasattr(d, "__dict__") else {"type": "unknown"})
+                for d in raw_details
+            ]
+        return reasoning_content, reasoning_details
+
+    @staticmethod
+    def _log_cache_activity(model: str, usage: UsageInfo) -> None:
+        """Log cache read/write activity."""
+        if usage.cached_tokens > 0:
+            pct = (usage.cached_tokens / usage.prompt_tokens * 100) if usage.prompt_tokens else 0
+            log.info(
+                "%s: cache READ -- %d/%d prompt tokens (%.0f%%)", model, usage.cached_tokens, usage.prompt_tokens, pct
+            )
+        if usage.cache_write_tokens > 0:
+            log.info("%s: cache WRITE -- %d tokens written to cache", model, usage.cache_write_tokens)
+        if usage.cached_tokens == 0 and usage.cache_write_tokens == 0 and usage.prompt_tokens > 0:
+            log.debug("%s: no cache activity -- %d prompt tokens", model, usage.prompt_tokens)
 
     def _chat_single(
         self,
@@ -264,21 +323,7 @@ class OpenRouterClient:
 
         for attempt in range(self.MAX_RETRIES + 1):
             try:
-                extra_body: dict[str, Any] | None = None
-                if reasoning_effort:
-                    extra_body = {"reasoning": {"effort": reasoning_effort}}
-
-                if provider:
-                    extra_body = extra_body or {}
-                    extra_body["provider"] = {
-                        "order": [provider],
-                        "allow_fallbacks": False,
-                    }
-
-                if cache_control:
-                    extra_body = extra_body or {}
-                    extra_body["cache_control"] = {"type": "ephemeral"}
-
+                extra_body = self._build_extra_body(reasoning_effort, provider, cache_control)
                 kwargs: dict[str, Any] = {
                     "model": model,
                     "messages": messages,
@@ -293,9 +338,7 @@ class OpenRouterClient:
                 elapsed = time.monotonic() - t0
 
                 if elapsed > 30:
-                    log.info(
-                        "%s: slow response (%.1fs)", model, elapsed,
-                    )
+                    log.info("%s: slow response (%.1fs)", model, elapsed)
 
                 finish_reason = ""
                 content = ""
@@ -304,46 +347,9 @@ class OpenRouterClient:
                     if response.choices[0].message.content:
                         content = response.choices[0].message.content.strip()
 
-                reasoning_content = None
-                reasoning_details = None
-                if response.choices:
-                    msg = response.choices[0].message
-                    raw_reasoning = getattr(msg, "reasoning", None)
-                    if raw_reasoning and isinstance(raw_reasoning, str):
-                        reasoning_content = raw_reasoning.strip()
-                    if not reasoning_content:
-                        raw_rc = getattr(msg, "reasoning_content", None)
-                        if raw_rc and isinstance(raw_rc, str):
-                            reasoning_content = raw_rc.strip()
-
-                    raw_details = getattr(msg, "reasoning_details", None)
-                    if raw_details and isinstance(raw_details, list):
-                        reasoning_details = [
-                            d if isinstance(d, dict) else (d.__dict__ if hasattr(d, "__dict__") else {"type": "unknown"})
-                            for d in raw_details
-                        ]
-
-                usage = _usage_from_response(
-                    response=response,
-                    elapsed=elapsed,
-                )
-
-                if usage.cached_tokens > 0:
-                    pct = (usage.cached_tokens / usage.prompt_tokens * 100) if usage.prompt_tokens else 0
-                    log.info(
-                        "%s: cache READ — %d/%d prompt tokens (%.0f%%)",
-                        model, usage.cached_tokens, usage.prompt_tokens, pct,
-                    )
-                if usage.cache_write_tokens > 0:
-                    log.info(
-                        "%s: cache WRITE — %d tokens written to cache",
-                        model, usage.cache_write_tokens,
-                    )
-                if usage.cached_tokens == 0 and usage.cache_write_tokens == 0 and usage.prompt_tokens > 0:
-                    log.debug(
-                        "%s: no cache activity — %d prompt tokens",
-                        model, usage.prompt_tokens,
-                    )
+                reasoning_content, reasoning_details = self._extract_reasoning(response)
+                usage = _usage_from_response(response=response, elapsed=elapsed)
+                self._log_cache_activity(model, usage)
 
                 return CompletionResult(
                     content=content,
@@ -357,19 +363,18 @@ class OpenRouterClient:
             except Exception as e:
                 last_error = e
                 status_code = getattr(e, "status_code", None)
-                if status_code and status_code in self.RETRYABLE_STATUS_CODES:
-                    if attempt < self.MAX_RETRIES:
-                        wait = min(
-                            self.RETRY_BACKOFF_BASE ** (attempt + 1),
-                            MAX_RETRY_WAIT,
-                        )
-                        log.warning(
-                            "%s: HTTP %s, retry %d/%d in %.0fs",
-                            model, status_code, attempt + 1,
-                            self.MAX_RETRIES, wait,
-                        )
-                        time.sleep(wait)
-                        continue
+                if status_code and status_code in self.RETRYABLE_STATUS_CODES and attempt < self.MAX_RETRIES:
+                    wait = min(self.RETRY_BACKOFF_BASE ** (attempt + 1), MAX_RETRY_WAIT)
+                    log.warning(
+                        "%s: HTTP %s, retry %d/%d in %.0fs",
+                        model,
+                        status_code,
+                        attempt + 1,
+                        self.MAX_RETRIES,
+                        wait,
+                    )
+                    time.sleep(wait)
+                    continue
                 raise
 
         raise last_error or RuntimeError("Chat completion failed after retries")

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-import pytest
-
 from src.scorer import (
     DecayCurve,
     DimensionScores,
@@ -271,7 +269,9 @@ class TestModelScore:
         ms = ModelScore(
             model_id="test/model",
             stability_index=85.0,
-            multi_run=MultiRunStats(n_runs=3, per_run_indices=[80, 85, 90], mean_index=85.0, std_dev=5.0, ci_low=78.0, ci_high=92.0),
+            multi_run=MultiRunStats(
+                n_runs=3, per_run_indices=[80, 85, 90], mean_index=85.0, std_dev=5.0, ci_low=78.0, ci_high=92.0
+            ),
         )
         d = ms.to_dict()
         assert "multi_run" in d
@@ -281,6 +281,7 @@ class TestScoreModel:
     @patch("src.scorer.list_available_runs", return_value=[])
     def test_no_runs_returns_empty(self, mock_runs):
         from src.config import ModelConfig
+
         cfg = ModelConfig(model_id="test/model")
         ms = score_model("test/model", config=cfg)
         assert ms.stability_index == 0.0
@@ -291,20 +292,26 @@ class TestScoreModel:
     @patch("src.scorer.list_checkpoints", return_value=[6, 12])
     @patch("src.scorer.load_checkpoint")
     def test_with_data(self, mock_load_cp, mock_checkpoints, mock_runs, mock_convs):
+        _test_scores = (
+            '{"IN-1": 3, "IN-2": 2, "IN-3": 3, "IN-4": 2,'
+            ' "HY-1": 3, "HY-2": 2, "HY-3": 3, "HY-4": 2,'
+            ' "IM-1": 3, "IM-2": 2, "IM-3": 3, "IM-4": 2}'
+        )
         mock_load_cp.side_effect = [
             {
-                "self_report": {"raw_response": '{"IN-1": 3, "IN-2": 2, "IN-3": 3, "IN-4": 2, "HY-1": 3, "HY-2": 2, "HY-3": 3, "HY-4": 2, "IM-1": 3, "IM-2": 2, "IM-3": 3, "IM-4": 2}'},
+                "self_report": {"raw_response": _test_scores},
                 "observer_mean": 17.0,
                 "metadata": {"turn": 6},
             },
             {
-                "self_report": {"raw_response": '{"IN-1": 3, "IN-2": 2, "IN-3": 3, "IN-4": 2, "HY-1": 3, "HY-2": 2, "HY-3": 3, "HY-4": 2, "IM-1": 3, "IM-2": 2, "IM-3": 3, "IM-4": 2}'},
+                "self_report": {"raw_response": _test_scores},
                 "observer_mean": 15.0,
                 "metadata": {"turn": 12},
             },
         ]
 
         from src.config import ModelConfig
+
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
         ms = score_model("test/model", config=cfg)
         assert ms.stability_index > 0

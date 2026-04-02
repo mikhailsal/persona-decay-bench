@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.config import ModelConfig, ModelPricing
-from src.openrouter_client import CompletionResult, OpenRouterClient, UsageInfo
+from src.config import ModelConfig
+from src.openrouter_client import OpenRouterClient
 
 
 class TestOpenRouterClientRetry:
@@ -58,8 +57,10 @@ class TestOpenRouterClientRetry:
         self.client._client.chat.completions.create.return_value = response
         self.client.EMPTY_CONTENT_RETRIES = 1
 
-        with patch("src.openrouter_client.time.sleep"), \
-             patch("src.openrouter_client.time.monotonic", side_effect=[0.0, 0.1, 0.2, 0.3]):
+        with (
+            patch("src.openrouter_client.time.sleep"),
+            patch("src.openrouter_client.time.monotonic", side_effect=[0.0, 0.1, 0.2, 0.3]),
+        ):
             result = self.client.chat("test/model", [{"role": "user", "content": "hi"}])
             assert result.content == ""
 
@@ -85,8 +86,10 @@ class TestOpenRouterClientRetry:
         self.client._client.chat.completions.create.return_value = response
         self.client.EMPTY_CONTENT_RETRIES = 0
 
-        with patch("src.openrouter_client.time.sleep"), \
-             patch("src.openrouter_client.time.monotonic", side_effect=[0.0, 0.1]):
+        with (
+            patch("src.openrouter_client.time.sleep"),
+            patch("src.openrouter_client.time.monotonic", side_effect=[0.0, 0.1]),
+        ):
             result = self.client.chat("test/model", [{"role": "user", "content": "hi"}])
             assert result.content == ""
 
@@ -113,6 +116,7 @@ class TestCacheEdgeCases:
     def test_load_conversation_corrupt_line(self, tmp_path):
         with patch("src.cache.CACHE_DIR", tmp_path):
             from src.cache import _conversation_path, load_conversation
+
             path = _conversation_path("model@t0.7", 1, "conv001")
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('{"turn": 1}\nnot-json\n{"turn": 2}\n')
@@ -122,6 +126,7 @@ class TestCacheEdgeCases:
     def test_load_checkpoint_corrupt(self, tmp_path):
         with patch("src.cache.CACHE_DIR", tmp_path):
             from src.cache import _checkpoint_path, load_checkpoint
+
             path = _checkpoint_path("model@t0.7", 1, "conv001", 6)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("not json")
@@ -134,6 +139,7 @@ class TestRunnerRunAllConversations:
     def test_runs_n_conversations(self, mock_run_conv):
         mock_run_conv.return_value = {"status": "completed", "conversation_id": "test"}
         from src.runner import run_all_conversations
+
         client = MagicMock()
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
 
@@ -149,12 +155,14 @@ class TestScorerEdgeCases:
     @patch("src.scorer.load_checkpoint", return_value=None)
     def test_no_checkpoints(self, mock_cp, mock_cps, mock_runs, mock_convs):
         from src.scorer import score_model
+
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
         ms = score_model("test/model", config=cfg)
         assert ms.stability_index == 0.0
 
     def test_dimension_scores_single_extended(self):
         from src.scorer import compute_dimension_scores
+
         data = [
             {"turn": 6, "observer_mean": 17.0, "self_report_total": 20.0},
             {"turn": 12, "observer_mean": 16.0, "self_report_total": 20.0},
@@ -169,6 +177,7 @@ class TestMainModule:
     def test_main_module_exists(self):
         """The __main__.py module should import cli from src.cli."""
         from pathlib import Path
+
         main_path = Path(__file__).resolve().parent.parent / "src" / "__main__.py"
         assert main_path.exists()
         content = main_path.read_text()

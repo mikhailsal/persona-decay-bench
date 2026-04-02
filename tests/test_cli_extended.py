@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
 
 from src.cli import cli
-from src.config import MODEL_CONFIGS, ModelConfig
-from src.scorer import DecayCurve, DimensionScores, ModelScore
+from src.config import ModelConfig
+from src.scorer import ModelScore
 
 
 @pytest.fixture

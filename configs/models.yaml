@@ -104,7 +104,7 @@ models:
 #   Very cheap, good instruction following. Generates follow-up
 #   questions to keep the conversation flowing naturally.
 #
-# Observer evaluator: google/gemini-3-flash-preview (×3 calls)
+# Observer evaluator: google/gemini-3-flash-preview (x3 calls)
 #   Same judge model used in the Independence Bench. Cheap, fast,
 #   reliable for structured rating tasks. Called 3 times independently
 #   per checkpoint for inter-rater reliability.

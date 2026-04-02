@@ -13,7 +13,6 @@ from src.config import (
     CACHE_DIR,
     CHECKPOINT_TURNS,
     CONFIGS_PATH,
-    ENV_PATH,
     MAX_TURNS,
     MODEL_CONFIGS,
     PROJECT_ROOT,
@@ -106,7 +105,7 @@ class TestModelConfig:
 
     def test_effective_temperature_default(self):
         cfg = ModelConfig(model_id="openai/gpt-5")
-        assert cfg.effective_temperature == 0.7
+        assert cfg.effective_temperature == 1.0
 
     def test_effective_reasoning_override(self):
         cfg = ModelConfig(model_id="openai/gpt-5", reasoning_effort="high")
@@ -117,7 +116,9 @@ class TestModelConfig:
         assert cfg.config_dir_name == "openai--gpt-5@low-t0.7"
 
     def test_config_dir_name_with_provider(self):
-        cfg = ModelConfig(model_id="moonshotai/kimi-k2.5", temperature=0.7, reasoning_effort="none", provider="moonshotai/int4")
+        cfg = ModelConfig(
+            model_id="moonshotai/kimi-k2.5", temperature=0.7, reasoning_effort="none", provider="moonshotai/int4"
+        )
         assert cfg.config_dir_name == "moonshotai--kimi-k2.5+moonshotai-int4@none-t0.7"
 
 
@@ -173,8 +174,7 @@ class TestGenerateDisplayLabel:
 
 class TestEnsureDirs:
     def test_creates_dirs(self, tmp_path):
-        with patch("src.config.CACHE_DIR", tmp_path / "cache"), \
-             patch("src.config.RESULTS_DIR", tmp_path / "results"):
+        with patch("src.config.CACHE_DIR", tmp_path / "cache"), patch("src.config.RESULTS_DIR", tmp_path / "results"):
             ensure_dirs()
             assert (tmp_path / "cache").exists()
             assert (tmp_path / "results").exists()
@@ -197,14 +197,18 @@ class TestLoadApiKey:
             assert key == "primary"
 
     def test_exits_on_missing_key(self):
-        with patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": ""}, clear=False), \
-             patch("src.config.ENV_PATH", Path("/nonexistent/.env")):
-            with pytest.raises(SystemExit):
-                load_api_key()
+        with (
+            patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": ""}, clear=False),
+            patch("src.config.ENV_PATH", Path("/nonexistent/.env")),
+            pytest.raises(SystemExit),
+        ):
+            load_api_key()
 
     def test_not_required(self):
-        with patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": ""}, clear=False), \
-             patch("src.config.ENV_PATH", Path("/nonexistent/.env")):
+        with (
+            patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": ""}, clear=False),
+            patch("src.config.ENV_PATH", Path("/nonexistent/.env")),
+        ):
             key = load_api_key(required=False)
             assert key == ""
 
@@ -240,8 +244,8 @@ class TestGrok41Config:
         assert len(matches) == 1
         cfg = matches[0]
         assert cfg.effective_reasoning == "low"
-        assert cfg.effective_temperature == 0.7
-        assert cfg.config_dir_name == "x-ai--grok-4.1-fast@low-t0.7"
+        assert cfg.effective_temperature == 1.0
+        assert cfg.config_dir_name == "x-ai--grok-4.1-fast@low-t1.0"
 
 
 class TestYamlLoader:

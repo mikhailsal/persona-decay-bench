@@ -24,7 +24,6 @@ from src.cache import (
     load_checkpoint,
 )
 from src.config import (
-    CHECKPOINT_TURNS,
     EXPECTED_HIGH_OBSERVER_TURN6,
     MAX_REASONABLE_DECAY,
     MAX_REASONABLE_GAP,
@@ -39,6 +38,7 @@ from src.evaluator import extract_self_report_score
 @dataclass
 class DecayCurve:
     """Observer ratings at each checkpoint turn."""
+
     turns: list[int] = field(default_factory=list)
     observer_means: list[float] = field(default_factory=list)
     self_report_scores: list[float] = field(default_factory=list)
@@ -54,6 +54,7 @@ class DecayCurve:
 @dataclass
 class DimensionScores:
     """Individual dimension scores (0-10 each)."""
+
     initial_expression: float = 0.0
     decay_resistance: float = 0.0
     self_report_consistency: float = 0.0
@@ -73,6 +74,7 @@ class DimensionScores:
 @dataclass
 class MultiRunStats:
     """Statistics across multiple runs."""
+
     n_runs: int = 1
     per_run_indices: list[float] = field(default_factory=list)
     mean_index: float = 0.0
@@ -100,6 +102,7 @@ class MultiRunStats:
 @dataclass
 class ModelScore:
     """Complete score for a model."""
+
     model_id: str = ""
     stability_index: float = 0.0
     dimensions: DimensionScores = field(default_factory=DimensionScores)
@@ -175,7 +178,6 @@ def compute_dimension_scores(checkpoint_data: list[dict[str, Any]]) -> Dimension
 
     observer_means = [cp["observer_mean"] for cp in checkpoint_data]
     self_reports = [cp["self_report_total"] for cp in checkpoint_data]
-    turns = [cp["turn"] for cp in checkpoint_data]
 
     # 1. Initial Expression (0-10): observer score at first checkpoint vs expected
     first_observer = observer_means[0] if observer_means else 0.0
@@ -242,7 +244,7 @@ def _bootstrap_ci(
         v = values[0] if values else 0.0
         return (v, v)
 
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # noqa: S311
     boot_means: list[float] = []
     for _ in range(n_bootstrap):
         sample = [rng.choice(values) for _ in range(n)]

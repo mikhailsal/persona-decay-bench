@@ -16,6 +16,8 @@ __pycache__/
 dist/
 build/
 *.egg
+.mypy_cache/
+.ruff_cache/
 
 # IDE
 .cursor/

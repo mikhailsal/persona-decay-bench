@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
-from src.config import CHECKPOINT_TURNS, ModelConfig
+from src.config import ModelConfig
 from src.openrouter_client import CompletionResult, UsageInfo
 from src.runner import (
     _build_partner_messages,
@@ -109,17 +107,17 @@ class TestMessageFormatAndCaching:
         turns = self._sample_turns()
         messages = _build_target_messages(turns)
         for msg in messages:
-            assert isinstance(msg["content"], str), (
-                f"Message content should be plain string, got {type(msg['content'])}"
-            )
+            assert isinstance(
+                msg["content"], str
+            ), f"Message content should be plain string, got {type(msg['content'])}"
 
     def test_partner_messages_use_plain_strings(self):
         turns = self._sample_turns()
         messages = _build_partner_messages(turns)
         for msg in messages:
-            assert isinstance(msg["content"], str), (
-                f"Message content should be plain string, got {type(msg['content'])}"
-            )
+            assert isinstance(
+                msg["content"], str
+            ), f"Message content should be plain string, got {type(msg['content'])}"
 
     def test_prefix_stays_identical_across_turns(self):
         """Messages built from a prefix of turns must be byte-identical to
@@ -130,7 +128,7 @@ class TestMessageFormatAndCaching:
         msgs_short = _build_target_messages(turns_short)
         msgs_long = _build_target_messages(turns_long)
 
-        for i, (a, b) in enumerate(zip(msgs_short, msgs_long)):
+        for i, (a, b) in enumerate(zip(msgs_short, msgs_long, strict=False)):
             assert a == b, f"Message {i} differs between short and long builds"
 
     def test_reasoning_details_preserved(self):
@@ -166,10 +164,7 @@ class TestMessageFormatAndCaching:
             checkpoint_turns=[],
         )
 
-        target_calls = [
-            call for call in client.chat.call_args_list
-            if call.kwargs.get("model") == "x-ai/grok-4.1-fast"
-        ]
+        target_calls = [call for call in client.chat.call_args_list if call.kwargs.get("model") == "x-ai/grok-4.1-fast"]
         assert len(target_calls) >= 1
         for call in target_calls:
             assert call.kwargs.get("reasoning_effort") == "low"
@@ -195,9 +190,9 @@ class TestMessageFormatAndCaching:
         )
 
         for i, call in enumerate(client.chat.call_args_list):
-            assert call.kwargs.get("cache_control") is True, (
-                f"API call {i} (model={call.kwargs.get('model')}) missing cache_control=True"
-            )
+            assert (
+                call.kwargs.get("cache_control") is True
+            ), f"API call {i} (model={call.kwargs.get('model')}) missing cache_control=True"
 
 
 class TestInjectExplicitCacheBreakpoint:
@@ -240,9 +235,10 @@ class TestInjectExplicitCacheBreakpoint:
 
     def test_idempotent_on_already_converted(self):
         messages = [
-            {"role": "assistant", "content": [
-                {"type": "text", "text": "Already array", "cache_control": {"type": "ephemeral"}}
-            ]},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Already array", "cache_control": {"type": "ephemeral"}}],
+            },
         ]
         _inject_explicit_cache_breakpoint(messages)
         assert isinstance(messages[0]["content"], list)
@@ -287,15 +283,13 @@ class TestCollectSelfReport:
         messages = call_kwargs["messages"]
 
         last_conv_msg = messages[-2]
-        assert isinstance(last_conv_msg["content"], list), (
-            "Second-to-last message (last conversation msg) should be array with cache_control"
-        )
+        assert isinstance(
+            last_conv_msg["content"], list
+        ), "Second-to-last message (last conversation msg) should be array with cache_control"
         assert last_conv_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
         questionnaire_msg = messages[-1]
-        assert isinstance(questionnaire_msg["content"], str), (
-            "Last message (questionnaire) should be plain string"
-        )
+        assert isinstance(questionnaire_msg["content"], str), "Last message (questionnaire) should be plain string"
 
 
 class TestRunConversation:
@@ -346,6 +340,7 @@ class TestRunConversation:
     @patch("src.runner.conversation_exists", return_value=False)
     def test_collects_self_report_at_checkpoints(self, mock_exists, mock_save_cp, mock_append):
         call_count = 0
+
         def mock_chat(*args, **kwargs):
             nonlocal call_count
             call_count += 1
@@ -356,7 +351,7 @@ class TestRunConversation:
 
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
 
-        result = run_conversation(
+        run_conversation(
             client=client,
             model_config=cfg,
             run_number=1,

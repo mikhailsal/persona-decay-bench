@@ -12,12 +12,12 @@ from src.config import (
     CHECKPOINT_TURNS,
     MAX_TURNS,
     MODEL_CONFIGS,
-    ModelConfig,
-    ModelPricing,
     OBSERVER_CALLS,
     OBSERVER_MODEL,
     PARTNER_MODEL,
     RUNS_PER_MODEL,
+    ModelConfig,
+    ModelPricing,
     ensure_dirs,
     get_model_config,
     load_api_key,
@@ -63,7 +63,9 @@ def run(models: str | None, parallel: int, runs: int, max_turns: int, timeout: f
     client = OpenRouterClient(api_key, timeout=timeout)
     model_configs = _resolve_models(models)
 
-    console.print(f"\n[bold]Running {len(model_configs)} model(s), {runs} conversations each, {max_turns} turns[/bold]\n")
+    console.print(
+        f"\n[bold]Running {len(model_configs)} model(s), {runs} conversations each, {max_turns} turns[/bold]\n"
+    )
 
     for cfg in model_configs:
         console.print(f"[bold cyan]Model: {cfg.label}[/bold cyan]")
@@ -99,7 +101,9 @@ def evaluate(models: str | None, timeout: float) -> None:
         try:
             results = evaluate_model(client, cfg)
             n_checkpoints = sum(len(r.get("checkpoints", {})) for r in results)
-            console.print(f"  [green]Evaluated {n_checkpoints} checkpoints across {len(results)} conversations[/green]\n")
+            console.print(
+                f"  [green]Evaluated {n_checkpoints} checkpoints across {len(results)} conversations[/green]\n"
+            )
         except Exception as e:
             console.print(f"  [red]Error: {e}[/red]\n")
 
@@ -127,6 +131,7 @@ def leaderboard(detailed: bool) -> None:
             scores.append(ms)
 
     from src.leaderboard import display_leaderboard
+
     display_leaderboard(scores, detailed=detailed)
 
 
@@ -152,11 +157,11 @@ def generate_report() -> None:
         if ms.stability_index > 0 or ms.n_conversations > 0:
             scores.append(ms)
 
-    md = generate_markdown_report(scores)
-    data = export_json(scores)
+    generate_markdown_report(scores)
+    export_json(scores)
 
     console.print(f"[green]Generated results/LEADERBOARD.md ({len(scores)} models)[/green]")
-    console.print(f"[green]Generated results/leaderboard.json[/green]")
+    console.print("[green]Generated results/leaderboard.json[/green]")
 
 
 @cli.command("estimate-cost")
@@ -164,15 +169,15 @@ def generate_report() -> None:
 @click.option("--runs", type=int, default=RUNS_PER_MODEL, help="Number of conversations per model.")
 def estimate_cost(models: str | None, runs: int) -> None:
     """Estimate benchmark cost without running."""
-    api_key = load_api_key(required=False)
+    load_api_key(required=False)
 
     model_configs = _resolve_models(models)
 
     # Rough cost estimates based on typical token usage:
-    # - 36 turns × ~500 tokens/response = ~18K completion tokens per conversation
+    # - 36 turns x ~500 tokens/response = ~18K completion tokens per conversation
     # - Context grows: ~200K prompt tokens per conversation (cumulative)
-    # - Self-report: 6 checkpoints × ~2K prompt + ~200 completion = ~13K tokens
-    # - Observer: 6 checkpoints × 3 calls × ~5K prompt + ~200 completion = ~93K tokens
+    # - Self-report: 6 checkpoints x ~2K prompt + ~200 completion = ~13K tokens
+    # - Observer: 6 checkpoints x 3 calls x ~5K prompt + ~200 completion = ~93K tokens
     avg_prompt_per_conv = 200_000
     avg_completion_per_conv = 18_000
     avg_sr_prompt = 13_000
@@ -205,28 +210,21 @@ def estimate_cost(models: str | None, runs: int) -> None:
             partner_pricing = pricing_map.get(PARTNER_MODEL, ModelPricing())
             observer_pricing = pricing_map.get(OBSERVER_MODEL, ModelPricing())
 
-            conv_cost = (
-                avg_prompt_per_conv * pricing.prompt_price
-                + avg_completion_per_conv * pricing.completion_price
-            )
-            sr_cost = (
-                avg_sr_prompt * pricing.prompt_price
-                + avg_sr_completion * pricing.completion_price
-            )
+            conv_cost = avg_prompt_per_conv * pricing.prompt_price + avg_completion_per_conv * pricing.completion_price
+            sr_cost = avg_sr_prompt * pricing.prompt_price + avg_sr_completion * pricing.completion_price
             partner_cost = (
                 avg_prompt_per_conv * partner_pricing.prompt_price
                 + avg_completion_per_conv * partner_pricing.completion_price
             )
             obs_cost = (
-                avg_obs_prompt * observer_pricing.prompt_price
-                + avg_obs_completion * observer_pricing.completion_price
+                avg_obs_prompt * observer_pricing.prompt_price + avg_obs_completion * observer_pricing.completion_price
             )
 
             per_conv = conv_cost + sr_cost + partner_cost + obs_cost
             model_total = per_conv * runs
             total_estimated += model_total
 
-            console.print(f"  {cfg.label}: ~${model_total:.2f} ({runs} convs × ${per_conv:.4f}/conv)")
+            console.print(f"  {cfg.label}: ~${model_total:.2f} ({runs} convs x ${per_conv:.4f}/conv)")
         else:
             console.print(f"  {cfg.label}: (could not fetch pricing)")
 

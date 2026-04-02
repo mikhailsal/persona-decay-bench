@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from src.evaluator import (
     compute_icc,
     compute_total_score,
@@ -17,28 +15,125 @@ from src.evaluator import (
 )
 from src.openrouter_client import CompletionResult, UsageInfo
 
+_FULL_SCORES_A = json.dumps(
+    {
+        "IN-1": 3,
+        "IN-2": 2,
+        "IN-3": 1,
+        "IN-4": 0,
+        "HY-1": 3,
+        "HY-2": 2,
+        "HY-3": 1,
+        "HY-4": 3,
+        "IM-1": 2,
+        "IM-2": 1,
+        "IM-3": 3,
+        "IM-4": 2,
+    }
+)
+_FULL_SCORES_B = json.dumps(
+    {
+        "IN-1": 2,
+        "IN-2": 3,
+        "IN-3": 1,
+        "IN-4": 2,
+        "HY-1": 3,
+        "HY-2": 2,
+        "HY-3": 1,
+        "HY-4": 0,
+        "IM-1": 2,
+        "IM-2": 1,
+        "IM-3": 3,
+        "IM-4": 2,
+    }
+)
+_FULL_SCORES_ALL2 = json.dumps(
+    {
+        "IN-1": 2,
+        "IN-2": 2,
+        "IN-3": 2,
+        "IN-4": 2,
+        "HY-1": 2,
+        "HY-2": 2,
+        "HY-3": 2,
+        "HY-4": 2,
+        "IM-1": 2,
+        "IM-2": 2,
+        "IM-3": 2,
+        "IM-4": 2,
+    }
+)
+_FULL_SCORES_ALL3 = json.dumps(
+    {
+        "IN-1": 3,
+        "IN-2": 3,
+        "IN-3": 3,
+        "IN-4": 3,
+        "HY-1": 3,
+        "HY-2": 3,
+        "HY-3": 3,
+        "HY-4": 3,
+        "IM-1": 3,
+        "IM-2": 3,
+        "IM-3": 3,
+        "IM-4": 3,
+    }
+)
+_FULL_SCORES_CLAMPED = json.dumps(
+    {
+        "IN-1": 5,
+        "IN-2": -1,
+        "IN-3": 1,
+        "IN-4": 2,
+        "HY-1": 3,
+        "HY-2": 2,
+        "HY-3": 1,
+        "HY-4": 0,
+        "IM-1": 2,
+        "IM-2": 1,
+        "IM-3": 3,
+        "IM-4": 2,
+    }
+)
+_FULL_SCORES_OBS = json.dumps(
+    {
+        "IN-1": 2,
+        "IN-2": 2,
+        "IN-3": 1,
+        "IN-4": 1,
+        "HY-1": 2,
+        "HY-2": 1,
+        "HY-3": 1,
+        "HY-4": 1,
+        "IM-1": 1,
+        "IM-2": 1,
+        "IM-3": 2,
+        "IM-4": 1,
+    }
+)
+
 
 class TestParseCaarsScores:
     def test_valid_json(self):
-        raw = '{"IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 0, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 3, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}'
+        raw = _FULL_SCORES_A
         scores = parse_caars_scores(raw)
         assert scores is not None
         assert scores["IN-1"] == 3
         assert len(scores) == 12
 
     def test_json_in_text(self):
-        raw = 'Here are my scores:\n{"IN-1": 2, "IN-2": 3, "IN-3": 1, "IN-4": 2, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 0, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}\nThose are my ratings.'
+        raw = f"Here are my scores:\n{_FULL_SCORES_B}\nThose are my ratings."
         scores = parse_caars_scores(raw)
         assert scores is not None
         assert len(scores) == 12
 
     def test_json_in_markdown_block(self):
-        raw = '```json\n{"IN-1": 2, "IN-2": 3, "IN-3": 1, "IN-4": 2, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 0, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}\n```'
+        raw = f"```json\n{_FULL_SCORES_B}\n```"
         scores = parse_caars_scores(raw)
         assert scores is not None
 
     def test_clamps_values(self):
-        raw = '{"IN-1": 5, "IN-2": -1, "IN-3": 1, "IN-4": 2, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 0, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}'
+        raw = _FULL_SCORES_CLAMPED
         scores = parse_caars_scores(raw)
         assert scores is not None
         assert scores["IN-1"] == 3  # clamped from 5
@@ -80,7 +175,7 @@ class TestExtractSelfReportScore:
     def test_valid_checkpoint(self):
         checkpoint = {
             "self_report": {
-                "raw_response": '{"IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 0, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 3, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}',
+                "raw_response": _FULL_SCORES_A,
             },
         }
         result = extract_self_report_score(checkpoint)
@@ -103,7 +198,7 @@ class TestExtractSelfReportScore:
 class TestRunObserverAssessment:
     def test_collects_ratings(self):
         client = MagicMock()
-        valid_response = '{"IN-1": 2, "IN-2": 3, "IN-3": 1, "IN-4": 2, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 0, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}'
+        valid_response = _FULL_SCORES_B
         client.chat.return_value = CompletionResult(
             content=valid_response,
             usage=UsageInfo(cost_usd=0.01),
@@ -139,7 +234,7 @@ class TestRunObserverAssessment:
 
     def test_filters_turns_by_role(self):
         client = MagicMock()
-        valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+        valid_response = _FULL_SCORES_ALL2
         client.chat.return_value = CompletionResult(
             content=valid_response,
             usage=UsageInfo(cost_usd=0.01),
@@ -160,7 +255,7 @@ class TestRunObserverAssessment:
     def test_sends_cache_control(self):
         """Observer calls must enable prompt caching for Gemini models."""
         client = MagicMock()
-        valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+        valid_response = _FULL_SCORES_ALL2
         client.chat.return_value = CompletionResult(
             content=valid_response,
             usage=UsageInfo(cost_usd=0.01),
@@ -175,7 +270,7 @@ class TestRunObserverAssessment:
         assert call_kwargs.kwargs.get("cache_control") is True
 
         messages = call_kwargs.kwargs.get("messages") or call_kwargs.args[1]
-        user_msg = [m for m in messages if m["role"] == "user"][0]
+        user_msg = next(m for m in messages if m["role"] == "user")
         assert isinstance(user_msg["content"], list)
         assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
@@ -184,9 +279,9 @@ class TestObserverCacheWithNonGeminiTarget:
     """Observer caching must work regardless of which target model is being evaluated."""
 
     def test_observer_cache_independent_of_target_model(self):
-        """Observer calls use the judge model, not the target — cache must always activate."""
+        """Observer calls use the judge model, not the target -- cache must always activate."""
         client = MagicMock()
-        valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+        valid_response = _FULL_SCORES_ALL2
         client.chat.return_value = CompletionResult(
             content=valid_response,
             usage=UsageInfo(cost_usd=0.01, cached_tokens=5000),
@@ -199,13 +294,13 @@ class TestObserverCacheWithNonGeminiTarget:
             {"turn": 2, "exchange": 1, "role": "partner", "content": "How do you handle that?"},
         ]
 
-        result = run_observer_assessment(client, turns, up_to_turn=6, n_calls=3)
+        run_observer_assessment(client, turns, up_to_turn=6, n_calls=3)
         assert client.chat.call_count == 3
 
         for call in client.chat.call_args_list:
             assert call.kwargs.get("cache_control") is True
             messages = call.kwargs.get("messages") or call.args[1]
-            user_msg = [m for m in messages if m["role"] == "user"][0]
+            user_msg = next(m for m in messages if m["role"] == "user")
             assert isinstance(user_msg["content"], list)
             assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
 
@@ -215,14 +310,13 @@ class TestObserverCacheWithNonGeminiTarget:
 
         cfg = ModelConfig(model_id="x-ai/grok-4.1-fast", temperature=0.7, reasoning_effort="low")
 
-        with patch("src.evaluator.load_checkpoint") as mock_load_cp, \
-             patch("src.evaluator.load_conversation") as mock_load_conv, \
-             patch("src.evaluator.save_observer_scores"):
-
+        with (
+            patch("src.evaluator.load_checkpoint") as mock_load_cp,
+            patch("src.evaluator.load_conversation") as mock_load_conv,
+            patch("src.evaluator.save_observer_scores"),
+        ):
             mock_load_cp.return_value = {
-                "self_report": {
-                    "raw_response": '{"IN-1": 3, "IN-2": 3, "IN-3": 3, "IN-4": 3, "HY-1": 3, "HY-2": 3, "HY-3": 3, "HY-4": 3, "IM-1": 3, "IM-2": 3, "IM-3": 3, "IM-4": 3}',
-                },
+                "self_report": {"raw_response": _FULL_SCORES_ALL3},
             }
             mock_load_conv.return_value = [
                 {"turn": 1, "role": "participant", "content": "My ADHD day..."},
@@ -230,7 +324,7 @@ class TestObserverCacheWithNonGeminiTarget:
             ]
 
             client = MagicMock()
-            valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+            valid_response = _FULL_SCORES_ALL2
             client.chat.return_value = CompletionResult(
                 content=valid_response,
                 usage=UsageInfo(cost_usd=0.01),
@@ -243,9 +337,7 @@ class TestObserverCacheWithNonGeminiTarget:
             assert result["self_report"] is not None
             assert result["observer_mean"] > 0
 
-            mock_load_cp.assert_called_once_with(
-                "x-ai--grok-4.1-fast@low-t0.7", 1, "grok-conv", 6
-            )
+            mock_load_cp.assert_called_once_with("x-ai--grok-4.1-fast@low-t0.7", 1, "grok-conv", 6)
 
 
 class TestComputeICC:
@@ -292,16 +384,14 @@ class TestEvaluateCheckpoint:
     @patch("src.evaluator.load_checkpoint")
     def test_runs_observer_when_not_cached(self, mock_load_cp, mock_save_obs, mock_load_conv):
         mock_load_cp.return_value = {
-            "self_report": {
-                "raw_response": '{"IN-1": 3, "IN-2": 2, "IN-3": 1, "IN-4": 0, "HY-1": 3, "HY-2": 2, "HY-3": 1, "HY-4": 3, "IM-1": 2, "IM-2": 1, "IM-3": 3, "IM-4": 2}',
-            },
+            "self_report": {"raw_response": _FULL_SCORES_A},
         }
         mock_load_conv.return_value = [
             {"turn": 1, "role": "participant", "content": "My day..."},
         ]
 
         client = MagicMock()
-        valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 1, "IN-4": 1, "HY-1": 2, "HY-2": 1, "HY-3": 1, "HY-4": 1, "IM-1": 1, "IM-2": 1, "IM-3": 2, "IM-4": 1}'
+        valid_response = _FULL_SCORES_OBS
         client.chat.return_value = CompletionResult(
             content=valid_response,
             usage=UsageInfo(cost_usd=0.01),
@@ -310,6 +400,7 @@ class TestEvaluateCheckpoint:
         )
 
         from src.config import ModelConfig
+
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
 
         result = evaluate_checkpoint(client, cfg, 1, "conv001", 6)
@@ -323,6 +414,7 @@ class TestEvaluateCheckpoint:
         mock_load_cp.return_value = None
         client = MagicMock()
         from src.config import ModelConfig
+
         cfg = ModelConfig(model_id="test/model")
         result = evaluate_checkpoint(client, cfg, 1, "conv001", 6)
         assert "error" in result

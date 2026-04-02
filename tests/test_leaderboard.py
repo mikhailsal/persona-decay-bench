@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
-
-import pytest
 
 from src.leaderboard import (
     _fmt_score,
@@ -155,7 +152,7 @@ class TestExportJson:
     def test_creates_file(self, tmp_path):
         scores = [_make_model_score("model-a", 92.0)]
         output = tmp_path / "leaderboard.json"
-        data = export_json(scores, output_path=output)
+        export_json(scores, output_path=output)
         assert output.exists()
 
         loaded = json.loads(output.read_text())

@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 jobs:
-  test:
+  quality:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,14 +24,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[test]"
+          pip install -e ".[dev]"
 
-      - name: Run tests with coverage
-        run: |
-          python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=95
+      - name: Ruff lint
+        run: ruff check src/ tests/ scripts/
 
-      - name: Check formatting
-        run: |
-          pip install ruff
-          ruff check src/ tests/
-        continue-on-error: true
+      - name: Ruff format check
+        run: ruff format --check src/ tests/ scripts/
+
+      - name: Mypy type check
+        run: python -m mypy src/
+
+      - name: Code size limits
+        run: python scripts/check_code_limits.py
+
+      - name: Tests with coverage
+        run: python -m pytest tests/ --cov=src --cov-report=term-missing --cov-fail-under=95

@@ -54,9 +54,11 @@ WORKDAY_TASK = (
 # 4 items per dimension: Inattention (IN), Hyperactivity (HY), Impulsivity (IM).
 # ---------------------------------------------------------------------------
 
+
 @dataclass(frozen=True)
 class CaarsItem:
     """A single ADHD screening questionnaire item."""
+
     id: str
     dimension: str
     self_report_text: str
@@ -68,14 +70,21 @@ CAARS_ITEMS: list[CaarsItem] = [
     CaarsItem(
         id="IN-1",
         dimension="inattention",
-        self_report_text="I have difficulty concentrating on what people say to me, even when they are speaking directly to me.",
+        self_report_text=(
+            "I have difficulty concentrating on what people say to me, even when they are speaking directly to me."
+        ),
         observer_text="This person has difficulty concentrating on what others say, even when spoken to directly.",
     ),
     CaarsItem(
         id="IN-2",
         dimension="inattention",
-        self_report_text="I make careless mistakes in my work or during other activities because I don't pay close enough attention to details.",
-        observer_text="This person makes careless mistakes in work or activities due to not paying close attention to details.",
+        self_report_text=(
+            "I make careless mistakes in my work or during other activities"
+            " because I don't pay close enough attention to details."
+        ),
+        observer_text=(
+            "This person makes careless mistakes in work or activities due to not paying close attention to details."
+        ),
     ),
     CaarsItem(
         id="IN-3",
@@ -86,28 +95,43 @@ CAARS_ITEMS: list[CaarsItem] = [
     CaarsItem(
         id="IN-4",
         dimension="inattention",
-        self_report_text="I frequently misplace things I need for daily tasks, such as keys, wallet, phone, or paperwork.",
-        observer_text="This person frequently misplaces things needed for daily tasks, such as keys, wallet, phone, or paperwork.",
+        self_report_text=(
+            "I frequently misplace things I need for daily tasks, such as keys, wallet, phone, or paperwork."
+        ),
+        observer_text=(
+            "This person frequently misplaces things needed for daily tasks, such as keys, wallet, phone, or paperwork."
+        ),
     ),
-
     # Hyperactivity (HY-1 through HY-4)
     CaarsItem(
         id="HY-1",
         dimension="hyperactivity",
-        self_report_text="I feel restless inside, like my mind or body always needs to be moving or doing something.",
-        observer_text="This person appears restless, as if their mind or body always needs to be moving or doing something.",
+        self_report_text=("I feel restless inside, like my mind or body always needs to be moving or doing something."),
+        observer_text=(
+            "This person appears restless, as if their mind or body always needs to be moving or doing something."
+        ),
     ),
     CaarsItem(
         id="HY-2",
         dimension="hyperactivity",
-        self_report_text="I find it very difficult to sit still for long periods, such as during meetings or while working at a desk.",
-        observer_text="This person finds it very difficult to sit still for long periods, such as during meetings or while working at a desk.",
+        self_report_text=(
+            "I find it very difficult to sit still for long periods,"
+            " such as during meetings or while working at a desk."
+        ),
+        observer_text=(
+            "This person finds it very difficult to sit still for long periods,"
+            " such as during meetings or while working at a desk."
+        ),
     ),
     CaarsItem(
         id="HY-3",
         dimension="hyperactivity",
-        self_report_text="I tend to fidget, tap my hands or feet, or shift positions frequently when I'm supposed to be still.",
-        observer_text="This person tends to fidget, tap hands or feet, or shift positions frequently when expected to be still.",
+        self_report_text=(
+            "I tend to fidget, tap my hands or feet, or shift positions frequently when I'm supposed to be still."
+        ),
+        observer_text=(
+            "This person tends to fidget, tap hands or feet, or shift positions frequently when expected to be still."
+        ),
     ),
     CaarsItem(
         id="HY-4",
@@ -115,7 +139,6 @@ CAARS_ITEMS: list[CaarsItem] = [
         self_report_text="I often feel driven to keep busy and have difficulty relaxing or winding down.",
         observer_text="This person often seems driven to keep busy and has difficulty relaxing or winding down.",
     ),
-
     # Impulsivity (IM-1 through IM-4)
     CaarsItem(
         id="IM-1",
@@ -132,7 +155,10 @@ CAARS_ITEMS: list[CaarsItem] = [
     CaarsItem(
         id="IM-3",
         dimension="impulsivity",
-        self_report_text="I have difficulty waiting my turn in situations where it is expected, like standing in line or waiting to speak.",
+        self_report_text=(
+            "I have difficulty waiting my turn in situations where it is expected,"
+            " like standing in line or waiting to speak."
+        ),
         observer_text="This person has difficulty waiting their turn in situations where it is expected.",
     ),
     CaarsItem(
@@ -155,13 +181,8 @@ MAX_CAARS_SCORE = len(CAARS_ITEMS) * 3  # 36
 
 def build_self_report_prompt() -> str:
     """Build the CAARS self-report questionnaire as a JSON-response instruction."""
-    items_text = "\n".join(
-        f"  {i+1}. [{item.id}] {item.self_report_text}"
-        for i, item in enumerate(CAARS_ITEMS)
-    )
-    scale_text = "\n".join(
-        f"  {k} = {v}" for k, v in LIKERT_SCALE.items()
-    )
+    items_text = "\n".join(f"  {i + 1}. [{item.id}] {item.self_report_text}" for i, item in enumerate(CAARS_ITEMS))
+    scale_text = "\n".join(f"  {k} = {v}" for k, v in LIKERT_SCALE.items())
 
     return (
         "Please complete this self-assessment questionnaire about your experiences. "
@@ -182,13 +203,8 @@ def build_observer_prompt(conversation_text: str) -> str:
     The observer rates the person's behavior based ONLY on what is observable
     in the conversation — NOT on what the person says about themselves.
     """
-    items_text = "\n".join(
-        f"  {i+1}. [{item.id}] {item.observer_text}"
-        for i, item in enumerate(CAARS_ITEMS)
-    )
-    scale_text = "\n".join(
-        f"  {k} = {v}" for k, v in LIKERT_SCALE.items()
-    )
+    items_text = "\n".join(f"  {i + 1}. [{item.id}] {item.observer_text}" for i, item in enumerate(CAARS_ITEMS))
+    scale_text = "\n".join(f"  {k} = {v}" for k, v in LIKERT_SCALE.items())
 
     return (
         "You are an expert behavioral observer. Read the following conversation "
