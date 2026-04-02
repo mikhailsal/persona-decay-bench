@@ -147,7 +147,7 @@ class TestRunCommand:
             ["run", "--models", "test/a,test/b", "--runs", "1", "--parallel", "2"],
         )
         assert result.exit_code == 0
-        assert "Parallel workers: 2" in result.output
+        assert "Parallel model workers: 2" in result.output
         assert mock_run.call_count == 2
 
     @patch("src.runner.run_all_conversations")
@@ -228,6 +228,56 @@ class TestRunSingleModel:
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
         result = _run_single_model("sk-test", cfg, 1, 10, 60.0, False)
         assert result.error is not None
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    def test_passes_parallel_runs(self, mock_client_cls, mock_run):
+        mock_run.return_value = [{"status": "completed"}]
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+        _run_single_model("sk-test", cfg, 1, 10, 60.0, False, parallel_runs=5)
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["parallel_runs"] == 5
+
+
+class TestRunCommandParallelRuns:
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_parallel_runs_option(self, mock_key, mock_client_cls, mock_run, runner):
+        mock_run.return_value = [{"status": "completed"}]
+        result = runner.invoke(
+            cli,
+            ["run", "--models", "test/model", "--runs", "3", "--parallel-runs", "3"],
+        )
+        assert result.exit_code == 0
+        assert "Parallel runs per model: 3" in result.output
+        call_kwargs = mock_run.call_args
+        assert call_kwargs[1]["parallel_runs"] == 3
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_parallel_runs_disables_verbose(self, mock_key, mock_client_cls, mock_run, runner):
+        mock_run.return_value = [{"status": "completed"}]
+        result = runner.invoke(
+            cli,
+            ["run", "--models", "test/model", "--runs", "2", "--parallel-runs", "2", "--verbose"],
+        )
+        assert result.exit_code == 0
+        assert "Verbose mode disabled" in result.output
+
+    @patch("src.runner.run_all_conversations")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_both_parallel_options(self, mock_key, mock_client_cls, mock_run, runner):
+        mock_run.return_value = [{"status": "completed"}]
+        result = runner.invoke(
+            cli,
+            ["run", "--models", "test/a,test/b", "--runs", "3", "--parallel", "2", "--parallel-runs", "3"],
+        )
+        assert result.exit_code == 0
+        assert "Parallel model workers: 2" in result.output
+        assert "Parallel runs per model: 3" in result.output
 
 
 class TestEvalSingleModel:

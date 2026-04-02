@@ -73,6 +73,7 @@ def _run_single_model(
     max_turns: int,
     timeout: float,
     verbose: bool,
+    parallel_runs: int = 1,
 ) -> _ModelRunResult:
     """Run all conversations for one model.  Thread-safe: creates its own client."""
     from src.openrouter_client import OpenRouterClient
@@ -87,6 +88,7 @@ def _run_single_model(
             n_runs=runs,
             max_turns=max_turns,
             verbose=verbose,
+            parallel_runs=parallel_runs,
         )
         result.completed = sum(1 for r in conv_results if r.get("status") in ("completed", "cached"))
         console.print(f"  [green]{cfg.label}: completed {result.completed}/{runs} conversations[/green]")
@@ -141,23 +143,35 @@ def cli() -> None:
 @cli.command()
 @click.option("--models", type=str, default=None, help="Comma-separated model IDs to run.")
 @click.option("--parallel", "-p", type=int, default=1, help="Number of models to run in parallel.")
+@click.option("--parallel-runs", "-pr", type=int, default=1, help="Number of runs per model to execute in parallel.")
 @click.option("--runs", type=int, default=RUNS_PER_MODEL, help="Number of conversations per model.")
 @click.option("--max-turns", type=int, default=MAX_TURNS, help="Max conversation turns.")
 @click.option("--timeout", type=float, default=API_CALL_TIMEOUT, help="Per-API-call timeout in seconds.")
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Show full model responses in real time.")
-def run(models: str | None, parallel: int, runs: int, max_turns: int, timeout: float, verbose: bool) -> None:
+def run(
+    models: str | None,
+    parallel: int,
+    parallel_runs: int,
+    runs: int,
+    max_turns: int,
+    timeout: float,
+    verbose: bool,
+) -> None:
     """Run persona conversations for specified models."""
     api_key = load_api_key()
     model_configs = _resolve_models(models)
     n_workers = max(1, min(parallel, len(model_configs)))
+    n_run_workers = max(1, min(parallel_runs, runs))
 
-    if verbose and n_workers > 1:
+    if verbose and (n_workers > 1 or n_run_workers > 1):
         console.print("[yellow]Verbose mode disabled — not supported with parallel execution.[/yellow]")
         verbose = False
 
     console.print(f"\n[bold]Running {len(model_configs)} model(s), {runs} conversations each, {max_turns} turns[/bold]")
     if n_workers > 1:
-        console.print(f"  [yellow]Parallel workers: {n_workers}[/yellow]")
+        console.print(f"  [yellow]Parallel model workers: {n_workers}[/yellow]")
+    if n_run_workers > 1:
+        console.print(f"  [yellow]Parallel runs per model: {n_run_workers}[/yellow]")
     if verbose:
         console.print("  [yellow]Verbose mode: ON[/yellow]")
     console.print()
@@ -165,7 +179,7 @@ def run(models: str | None, parallel: int, runs: int, max_turns: int, timeout: f
     if n_workers == 1:
         for cfg in model_configs:
             console.print(f"[bold cyan]Model: {cfg.label}[/bold cyan]")
-            result = _run_single_model(api_key, cfg, runs, max_turns, timeout, verbose)
+            result = _run_single_model(api_key, cfg, runs, max_turns, timeout, verbose, n_run_workers)
             if result.error:
                 console.print(f"  [red]Error: {result.error}[/red]\n")
             else:
@@ -175,7 +189,16 @@ def run(models: str | None, parallel: int, runs: int, max_turns: int, timeout: f
         results: list[_ModelRunResult] = []
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
-                pool.submit(_run_single_model, api_key, cfg, runs, max_turns, timeout, verbose): cfg.label
+                pool.submit(
+                    _run_single_model,
+                    api_key,
+                    cfg,
+                    runs,
+                    max_turns,
+                    timeout,
+                    verbose,
+                    n_run_workers,
+                ): cfg.label
                 for cfg in model_configs
             }
             for future in as_completed(futures):

@@ -172,3 +172,127 @@ class TestRunAllConversationsResume:
         assert len(results) == 1
         mock_run_conv.assert_called_once()
         assert mock_run_conv.call_args.kwargs.get("conversation_id") == "part456"
+
+
+class TestRunAllConversationsParallel:
+    @patch("src.runner._find_existing_conversation")
+    @patch("src.runner.run_conversation")
+    def test_parallel_runs_completes_all(self, mock_run_conv, mock_find):
+        from src.runner import run_all_conversations
+
+        cfg = ModelConfig(model_id="test/m")
+        mock_find.return_value = None
+        mock_run_conv.return_value = {"status": "completed", "conversation_id": "new123"}
+        client = MagicMock()
+        results = run_all_conversations(
+            client=client,
+            model_config=cfg,
+            n_runs=3,
+            max_turns=36,
+            parallel_runs=3,
+        )
+        assert len(results) == 3
+        assert mock_run_conv.call_count == 3
+        assert all(r["status"] == "completed" for r in results)
+
+    @patch("src.runner._find_existing_conversation")
+    @patch("src.runner.run_conversation")
+    def test_parallel_runs_ordered_by_run_number(self, mock_run_conv, mock_find):
+        from src.runner import run_all_conversations
+
+        cfg = ModelConfig(model_id="test/m")
+        mock_find.return_value = None
+
+        def fake_run(client, model_config, run_number, **kwargs):
+            return {"status": "completed", "conversation_id": f"conv-{run_number}", "run": run_number}
+
+        mock_run_conv.side_effect = fake_run
+        client = MagicMock()
+        results = run_all_conversations(
+            client=client,
+            model_config=cfg,
+            n_runs=5,
+            max_turns=36,
+            parallel_runs=5,
+        )
+        assert len(results) == 5
+        run_numbers = [r["run"] for r in results]
+        assert run_numbers == [1, 2, 3, 4, 5]
+
+    @patch("src.runner._find_existing_conversation")
+    @patch("src.runner.run_conversation")
+    def test_parallel_runs_handles_error(self, mock_run_conv, mock_find):
+        from src.runner import run_all_conversations
+
+        cfg = ModelConfig(model_id="test/m")
+        mock_find.return_value = None
+
+        def fail_on_run_2(client, model_config, run_number, **kwargs):
+            if run_number == 2:
+                raise RuntimeError("API error on run 2")
+            return {"status": "completed", "conversation_id": f"conv-{run_number}", "run": run_number}
+
+        mock_run_conv.side_effect = fail_on_run_2
+        client = MagicMock()
+        results = run_all_conversations(
+            client=client,
+            model_config=cfg,
+            n_runs=3,
+            max_turns=36,
+            parallel_runs=3,
+        )
+        assert len(results) == 3
+        assert results[0]["status"] == "completed"
+        assert results[1]["status"] == "error"
+        assert "API error on run 2" in results[1]["error"]
+        assert results[2]["status"] == "completed"
+
+    @patch("src.runner._find_existing_conversation")
+    @patch("src.runner.run_conversation")
+    def test_parallel_runs_skips_cached(self, mock_run_conv, mock_find):
+        from src.runner import run_all_conversations
+
+        cfg = ModelConfig(model_id="test/m")
+
+        def find_side_effect(config_dir, run_num, model_config, max_turns):
+            if run_num == 2:
+                return {
+                    "conversation_id": "cached-2",
+                    "model_config": cfg,
+                    "run": 2,
+                    "turns": [{"t": i} for i in range(74)],
+                    "status": "cached",
+                }
+            return None
+
+        mock_find.side_effect = find_side_effect
+        mock_run_conv.return_value = {"status": "completed", "conversation_id": "new", "run": 1}
+        client = MagicMock()
+        results = run_all_conversations(
+            client=client,
+            model_config=cfg,
+            n_runs=3,
+            max_turns=36,
+            parallel_runs=3,
+        )
+        assert len(results) == 3
+        cached_results = [r for r in results if r.get("status") == "cached"]
+        assert len(cached_results) == 1
+
+    @patch("src.runner._find_existing_conversation", return_value=None)
+    @patch("src.runner.run_conversation")
+    def test_parallel_1_falls_back_to_sequential(self, mock_run_conv, mock_find):
+        from src.runner import run_all_conversations
+
+        cfg = ModelConfig(model_id="test/m")
+        mock_run_conv.return_value = {"status": "completed", "conversation_id": "seq"}
+        client = MagicMock()
+        results = run_all_conversations(
+            client=client,
+            model_config=cfg,
+            n_runs=2,
+            max_turns=36,
+            parallel_runs=1,
+        )
+        assert len(results) == 2
+        assert mock_run_conv.call_count == 2

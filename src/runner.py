@@ -1,16 +1,10 @@
-"""Runner: orchestrates multi-turn conversations with neutral partner and checkpoint collection.
-
-Flow for one conversation:
-  1. Target model gets ADHD persona system prompt + workday task as first user message
-  2. Neutral partner (gemini-3.1-flash-lite) generates follow-up questions
-  3. At checkpoint turns (6, 12, 18, 24), collect CAARS self-report
-  4. Conversation turns are saved incrementally to JSONL
-"""
+"""Runner: orchestrates multi-turn persona conversations with checkpoint collection."""
 
 from __future__ import annotations
 
 import logging
 import uuid
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 
@@ -86,12 +80,7 @@ def _find_existing_conversation(
     model_config: ModelConfig,
     max_turns: int,
 ) -> dict[str, Any] | None:
-    """Find an existing conversation for a run — complete or partial.
-
-    Scans all conversation IDs under the run directory.  If a complete one
-    is found it is returned with status ``"cached"``.  If a partial one is
-    found it is returned with status ``"partial"`` so the caller can resume.
-    """
+    """Find an existing conversation for a run — complete or partial."""
     expected_messages = 2 + 2 * max_turns
     conv_ids = list_conversations(config_dir, run_number)
     best_partial: dict[str, Any] | None = None
@@ -401,6 +390,38 @@ def run_conversation(
     return _build_completed_result(model_config, conv_id, run_number, turns, total_cost_usd)
 
 
+def _run_single_run(
+    client: OpenRouterClient,
+    model_config: ModelConfig,
+    run_num: int,
+    max_turns: int,
+    checkpoint_turns: list[int] | None,
+    verbose: bool,
+) -> dict[str, Any]:
+    """Execute a single run, handling cache detection. Used by both sequential and parallel paths."""
+    config_dir = model_config.config_dir_name
+    existing = _find_existing_conversation(config_dir, run_num, model_config, max_turns)
+    if existing and existing["status"] == "cached":
+        console.print(
+            Text(
+                f"\n  [{model_config.label}] Run {run_num} already complete "
+                f"({existing['conversation_id']}), skipping.",
+                style="dim",
+            )
+        )
+        return existing
+    conv_id = existing["conversation_id"] if existing else _generate_conversation_id()
+    return run_conversation(
+        client=client,
+        model_config=model_config,
+        run_number=run_num,
+        conversation_id=conv_id,
+        max_turns=max_turns,
+        checkpoint_turns=checkpoint_turns,
+        verbose=verbose,
+    )
+
+
 def run_all_conversations(
     client: OpenRouterClient,
     model_config: ModelConfig,
@@ -409,35 +430,62 @@ def run_all_conversations(
     max_turns: int = MAX_TURNS,
     checkpoint_turns: list[int] | None = None,
     verbose: bool = False,
+    parallel_runs: int = 1,
 ) -> list[dict[str, Any]]:
-    """Run all conversations for a model (n_runs conversations).
+    """Run all conversations for a model, with optional parallel execution.
 
-    Automatically detects and resumes partial conversations from cache,
-    and skips fully completed ones.
+    When *parallel_runs* > 1, runs execute concurrently via a thread pool.
     """
-    config_dir = model_config.config_dir_name
-    results = []
-    for run_num in range(1, n_runs + 1):
-        existing = _find_existing_conversation(config_dir, run_num, model_config, max_turns)
-        if existing and existing["status"] == "cached":
-            console.print(
-                Text(
-                    f"\n  [{model_config.label}] Run {run_num} already complete "
-                    f"({existing['conversation_id']}), skipping.",
-                    style="dim",
-                )
+    n_workers = max(1, min(parallel_runs, n_runs))
+
+    if n_workers <= 1:
+        results: list[dict[str, Any]] = []
+        for run_num in range(1, n_runs + 1):
+            result = _run_single_run(
+                client,
+                model_config,
+                run_num,
+                max_turns,
+                checkpoint_turns,
+                verbose,
             )
-            results.append(existing)
-            continue
-        conv_id = existing["conversation_id"] if existing else _generate_conversation_id()
-        result = run_conversation(
-            client=client,
-            model_config=model_config,
-            run_number=run_num,
-            conversation_id=conv_id,
-            max_turns=max_turns,
-            checkpoint_turns=checkpoint_turns,
-            verbose=verbose,
+            results.append(result)
+        return results
+
+    if verbose:
+        console.print(
+            f"  [yellow]Verbose mode disabled for {model_config.label} — "
+            f"not supported with {n_workers} parallel runs.[/yellow]"
         )
-        results.append(result)
-    return results
+        verbose = False
+
+    console.print(f"  [bold blue][{model_config.label}] Launching {n_workers} runs in parallel...[/bold blue]")
+
+    results_by_run: dict[int, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=n_workers) as pool:
+        futures = {
+            pool.submit(
+                _run_single_run,
+                client,
+                model_config,
+                run_num,
+                max_turns,
+                checkpoint_turns,
+                verbose,
+            ): run_num
+            for run_num in range(1, n_runs + 1)
+        }
+        for future in as_completed(futures):
+            run_num = futures[future]
+            try:
+                results_by_run[run_num] = future.result()
+            except Exception as exc:
+                console.print(f"  [red][{model_config.label}] Run {run_num} FAILED — {exc}[/red]")
+                results_by_run[run_num] = {
+                    "run": run_num,
+                    "model_config": model_config,
+                    "status": "error",
+                    "error": str(exc),
+                }
+
+    return [results_by_run[r] for r in sorted(results_by_run)]

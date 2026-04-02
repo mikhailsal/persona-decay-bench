@@ -25,6 +25,12 @@ cp .env.example .env
 # Run benchmark on specific models
 persona-decay run --models "google/gemini-3-flash-preview"
 
+# Run all 5 runs in parallel for faster completion
+persona-decay run --models "google/gemini-3-flash-preview" --parallel-runs 5
+
+# Run multiple models in parallel, each with parallel runs
+persona-decay run --parallel 3 --parallel-runs 5
+
 # Evaluate observer ratings
 persona-decay evaluate --models "google/gemini-3-flash-preview"
 
@@ -37,6 +43,15 @@ persona-decay generate-report
 # Estimate cost without running
 persona-decay estimate-cost
 ```
+
+## Parallelism
+
+The benchmark supports two independent parallelism axes:
+
+- **`--parallel N` / `-p N`** — run N models concurrently (each model gets its own thread)
+- **`--parallel-runs N` / `-pr N`** — run N conversations per model concurrently
+
+These can be combined: `--parallel 3 --parallel-runs 5` will run 3 models at once, each executing all 5 conversation runs in parallel. Verbose mode is automatically disabled when any parallelism is active.
 
 ## Methodology
 
