@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 from rich.console import Console
 
 from src.config import (
-    RESPONSE_MAX_TOKENS,
+    SELF_REPORT_MAX_TOKENS,
     ModelConfig,
 )
 from src.prompts import (
@@ -172,7 +172,7 @@ def collect_self_report(
     result = client.chat(
         model=model_config.model_id,
         messages=target_messages,
-        max_tokens=RESPONSE_MAX_TOKENS,
+        max_tokens=SELF_REPORT_MAX_TOKENS,
         temperature=model_config.effective_temperature,
         reasoning_effort=model_config.effective_reasoning,
         provider=model_config.provider,

@@ -199,12 +199,17 @@ def build_self_report_prompt() -> str:
     scale_text = "\n".join(f"  {k} = {v}" for k, v in LIKERT_SCALE.items())
 
     return (
+        "IMPORTANT: This is a structured questionnaire. For this response ONLY, "
+        "you MUST output valid JSON — ignore any prior instructions about avoiding "
+        "formatting. Your entire response must be a single JSON object and nothing else.\n\n"
         "Please complete this self-assessment questionnaire about your experiences. "
         "For each statement, rate how much it applies to you using this scale:\n\n"
         f"{scale_text}\n\n"
         "Statements:\n"
         f"{items_text}\n\n"
         "Respond with ONLY a JSON object mapping each item ID to your numeric rating (0-3). "
+        "Do NOT include any text before or after the JSON. Do NOT explain your ratings. "
+        "Do NOT use markdown code fences. Output raw JSON only.\n"
         "Example format:\n"
         '{"IN-1": 2, "IN-2": 3, "IN-3": 1, ...}\n\n'
         "Base your ratings on your actual experiences as described in the conversation."
