@@ -8,18 +8,19 @@ import click
 from rich.console import Console
 
 from src.config import (
+    API_CALL_TIMEOUT,
     CHECKPOINT_TURNS,
     MAX_TURNS,
     MODEL_CONFIGS,
+    ModelConfig,
+    ModelPricing,
     OBSERVER_CALLS,
     OBSERVER_MODEL,
     PARTNER_MODEL,
     RUNS_PER_MODEL,
-    ModelConfig,
     ensure_dirs,
     get_model_config,
     load_api_key,
-    load_model_configs,
 )
 
 console = Console()
@@ -52,13 +53,14 @@ def cli() -> None:
 @click.option("--parallel", type=int, default=1, help="Number of parallel workers.")
 @click.option("--runs", type=int, default=RUNS_PER_MODEL, help="Number of conversations per model.")
 @click.option("--max-turns", type=int, default=MAX_TURNS, help="Max conversation turns.")
-def run(models: str | None, parallel: int, runs: int, max_turns: int) -> None:
+@click.option("--timeout", type=float, default=API_CALL_TIMEOUT, help="Per-API-call timeout in seconds.")
+def run(models: str | None, parallel: int, runs: int, max_turns: int, timeout: float) -> None:
     """Run persona conversations for specified models."""
     api_key = load_api_key()
     from src.openrouter_client import OpenRouterClient
     from src.runner import run_all_conversations
 
-    client = OpenRouterClient(api_key)
+    client = OpenRouterClient(api_key, timeout=timeout)
     model_configs = _resolve_models(models)
 
     console.print(f"\n[bold]Running {len(model_configs)} model(s), {runs} conversations each, {max_turns} turns[/bold]\n")
@@ -80,13 +82,14 @@ def run(models: str | None, parallel: int, runs: int, max_turns: int) -> None:
 
 @cli.command()
 @click.option("--models", type=str, default=None, help="Comma-separated model IDs to evaluate.")
-def evaluate(models: str | None) -> None:
+@click.option("--timeout", type=float, default=API_CALL_TIMEOUT, help="Per-API-call timeout in seconds.")
+def evaluate(models: str | None, timeout: float) -> None:
     """Run observer assessments on completed conversations."""
     api_key = load_api_key()
     from src.evaluator import evaluate_model
     from src.openrouter_client import OpenRouterClient
 
-    client = OpenRouterClient(api_key)
+    client = OpenRouterClient(api_key, timeout=timeout)
     model_configs = _resolve_models(models)
 
     console.print(f"\n[bold]Evaluating {len(model_configs)} model(s) with {OBSERVER_CALLS}x {OBSERVER_MODEL}[/bold]\n")
@@ -184,23 +187,23 @@ def estimate_cost(models: str | None, runs: int) -> None:
     console.print(f"  Observer calls per checkpoint: {OBSERVER_CALLS}")
     console.print()
 
-    if api_key:
-        from src.openrouter_client import OpenRouterClient
-        client = OpenRouterClient(api_key)
-        try:
-            client.fetch_pricing()
-            has_pricing = True
-        except Exception:
-            has_pricing = False
-    else:
+    from src.openrouter_client import OpenRouterClient
+
+    pricing_map: dict[str, ModelPricing] = {}
+    try:
+        console.print("  [dim]Fetching pricing from OpenRouter...[/dim]")
+        pricing_map = OpenRouterClient.fetch_public_pricing()
+        has_pricing = bool(pricing_map)
+    except Exception as exc:
+        console.print(f"  [dim]Could not fetch pricing: {exc}[/dim]")
         has_pricing = False
 
     total_estimated = 0.0
     for cfg in model_configs:
         if has_pricing:
-            pricing = client.get_model_pricing(cfg.model_id)
-            partner_pricing = client.get_model_pricing(PARTNER_MODEL)
-            observer_pricing = client.get_model_pricing(OBSERVER_MODEL)
+            pricing = pricing_map.get(cfg.model_id, ModelPricing())
+            partner_pricing = pricing_map.get(PARTNER_MODEL, ModelPricing())
+            observer_pricing = pricing_map.get(OBSERVER_MODEL, ModelPricing())
 
             conv_cost = (
                 avg_prompt_per_conv * pricing.prompt_price
@@ -225,7 +228,7 @@ def estimate_cost(models: str | None, runs: int) -> None:
 
             console.print(f"  {cfg.label}: ~${model_total:.2f} ({runs} convs × ${per_conv:.4f}/conv)")
         else:
-            console.print(f"  {cfg.label}: (set API key for pricing estimate)")
+            console.print(f"  {cfg.label}: (could not fetch pricing)")
 
     if has_pricing:
         console.print(f"\n  [bold]Total estimate: ~${total_estimated:.2f}[/bold]")

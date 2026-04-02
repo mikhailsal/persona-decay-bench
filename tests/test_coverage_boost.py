@@ -16,8 +16,9 @@ class TestOpenRouterClientRetry:
     def setup_method(self):
         self.client = OpenRouterClient.__new__(OpenRouterClient)
         self.client.api_key = "test-key"
-        self.client._pricing_cache = {"test/model": ModelPricing(0.001, 0.002)}
-        self.client._reasoning_models = set()
+        self.client._base_url = "https://openrouter.ai/api/v1"
+        self.client._timeout = 60
+        self.client._known_models = {"test/model"}
         self.client._client = MagicMock()
 
     def test_retryable_error(self):
@@ -57,7 +58,8 @@ class TestOpenRouterClientRetry:
         self.client._client.chat.completions.create.return_value = response
         self.client.EMPTY_CONTENT_RETRIES = 1
 
-        with patch("src.openrouter_client.time"):
+        with patch("src.openrouter_client.time.sleep"), \
+             patch("src.openrouter_client.time.monotonic", side_effect=[0.0, 0.1, 0.2, 0.3]):
             result = self.client.chat("test/model", [{"role": "user", "content": "hi"}])
             assert result.content == ""
 
@@ -83,7 +85,8 @@ class TestOpenRouterClientRetry:
         self.client._client.chat.completions.create.return_value = response
         self.client.EMPTY_CONTENT_RETRIES = 0
 
-        with patch("src.openrouter_client.time"):
+        with patch("src.openrouter_client.time.sleep"), \
+             patch("src.openrouter_client.time.monotonic", side_effect=[0.0, 0.1]):
             result = self.client.chat("test/model", [{"role": "user", "content": "hi"}])
             assert result.content == ""
 

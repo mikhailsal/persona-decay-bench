@@ -138,10 +138,14 @@ def run_observer_assessment(
     Returns:
         Dict with observer_ratings, observer_mean, observer_sd, observer_cost.
     """
-    relevant_turns = [
-        t for t in conversation_turns
-        if t.get("turn", 0) <= up_to_turn and t.get("role") in ("participant", "partner")
-    ]
+    relevant_turns = []
+    for t in conversation_turns:
+        if t.get("role") not in ("participant", "partner"):
+            continue
+        exchange = t.get("exchange")
+        if exchange is not None and exchange > up_to_turn:
+            continue
+        relevant_turns.append(t)
 
     formatted_turns = [
         {"role": t["role"], "content": t["content"]}

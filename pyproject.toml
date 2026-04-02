@@ -1,18 +1,19 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=75.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "persona-decay-bench"
 version = "0.1.0"
 description = "Benchmark for LLM persona decay: measures how well AI models sustain assigned persona expression over extended multi-turn conversations."
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 dependencies = [
     "openai>=1.30.0",
     "click>=8.1.0",
     "rich>=13.0.0",
     "python-dotenv>=1.0.0",
     "httpx>=0.27",
+    "requests>=2.31.0",
     "pyyaml>=6.0",
     "numpy>=1.26.0",
 ]

@@ -12,7 +12,8 @@ from src.openrouter_client import (
     CompletionResult,
     OpenRouterClient,
     UsageInfo,
-    _usage_from_openrouter_response,
+    _extract_cost,
+    _usage_from_response,
 )
 
 
@@ -58,53 +59,53 @@ class TestCompletionResult:
         assert r.content == "Hi"
 
 
+class TestExtractCost:
+    def test_float_cost(self):
+        assert _extract_cost(SimpleNamespace(cost=0.05)) == 0.05
+
+    def test_int_cost(self):
+        assert _extract_cost(SimpleNamespace(cost=1)) == 1.0
+
+    def test_string_cost(self):
+        assert _extract_cost(SimpleNamespace(cost="0.03")) == 0.03
+
+    def test_none_cost(self):
+        assert _extract_cost(SimpleNamespace(cost=None)) is None
+
+    def test_missing_cost(self):
+        assert _extract_cost(SimpleNamespace()) is None
+
+    def test_bool_cost_rejected(self):
+        assert _extract_cost(SimpleNamespace(cost=True)) is None
+
+    def test_bad_string(self):
+        assert _extract_cost(SimpleNamespace(cost="n/a")) is None
+
+
 class TestUsageFromResponse:
     def test_with_api_cost(self):
         response = _make_mock_response(cost=0.05)
-        usage = _usage_from_openrouter_response(
-            model="test/model",
-            response=response,
-            elapsed=1.0,
-            get_model_pricing=lambda m: ModelPricing(),
-        )
+        usage = _usage_from_response(response=response, elapsed=1.0)
         assert usage.cost_usd == 0.05
         assert usage.prompt_tokens == 10
 
     def test_with_string_cost(self):
         response = _make_mock_response(cost="0.03")
-        # Override cost attr
         response.usage.cost = "0.03"
-        usage = _usage_from_openrouter_response(
-            model="test/model",
-            response=response,
-            elapsed=1.0,
-            get_model_pricing=lambda m: ModelPricing(),
-        )
+        usage = _usage_from_response(response=response, elapsed=1.0)
         assert usage.cost_usd == 0.03
 
-    def test_fallback_to_pricing(self):
+    def test_no_cost_falls_back_to_zero(self):
         response = _make_mock_response(cost=None)
-        # Remove cost attr
         if hasattr(response.usage, "cost"):
             delattr(response.usage, "cost")
-        pricing = ModelPricing(prompt_price=0.001, completion_price=0.002)
-        usage = _usage_from_openrouter_response(
-            model="test/model",
-            response=response,
-            elapsed=2.0,
-            get_model_pricing=lambda m: pricing,
-        )
-        expected = 10 * 0.001 + 20 * 0.002
-        assert abs(usage.cost_usd - expected) < 1e-9
+        usage = _usage_from_response(response=response, elapsed=2.0)
+        assert usage.cost_usd == 0.0
+        assert usage.prompt_tokens == 10
 
     def test_no_usage(self):
         response = SimpleNamespace(choices=[], usage=None)
-        usage = _usage_from_openrouter_response(
-            model="test/model",
-            response=response,
-            elapsed=0.5,
-            get_model_pricing=lambda m: ModelPricing(),
-        )
+        usage = _usage_from_response(response=response, elapsed=0.5)
         assert usage.prompt_tokens == 0
         assert usage.elapsed_seconds == 0.5
 
@@ -113,29 +114,16 @@ class TestOpenRouterClient:
     def setup_method(self):
         self.client = OpenRouterClient.__new__(OpenRouterClient)
         self.client.api_key = "test-key"
-        self.client._pricing_cache = {
-            "test/model": ModelPricing(prompt_price=0.001, completion_price=0.002),
-        }
-        self.client._reasoning_models = {"test/reasoning-model"}
+        self.client._base_url = "https://openrouter.ai/api/v1"
+        self.client._timeout = 60
+        self.client._known_models = {"test/model", "test/reasoning-model"}
         self.client._client = MagicMock()
-
-    def test_get_model_pricing(self):
-        pricing = self.client.get_model_pricing("test/model")
-        assert pricing.prompt_price == 0.001
-
-    def test_get_model_pricing_default(self):
-        pricing = self.client.get_model_pricing("unknown/model")
-        assert pricing.prompt_price == 0.0
 
     def test_validate_model_true(self):
         assert self.client.validate_model("test/model") is True
 
     def test_validate_model_false(self):
         assert self.client.validate_model("unknown/model") is False
-
-    def test_supports_reasoning(self):
-        assert self.client.supports_reasoning("test/reasoning-model") is True
-        assert self.client.supports_reasoning("test/model") is False
 
     def test_chat_success(self):
         mock_response = _make_mock_response(content="Test response", cost=0.01)
@@ -179,36 +167,27 @@ class TestOpenRouterClient:
         assert call_kwargs["extra_body"]["provider"]["order"] == ["test/provider"]
 
     def test_resolve_reasoning_off(self):
-        assert self.client._resolve_reasoning_effort("test/model", "off") is None
+        assert OpenRouterClient._resolve_reasoning_effort("off") is None
+
+    def test_resolve_reasoning_none_string(self):
+        assert OpenRouterClient._resolve_reasoning_effort("none") is None
 
     def test_resolve_reasoning_explicit(self):
-        assert self.client._resolve_reasoning_effort("test/model", "high") == "high"
+        assert OpenRouterClient._resolve_reasoning_effort("high") == "high"
 
-    def test_resolve_reasoning_auto_no_support(self):
-        assert self.client._resolve_reasoning_effort("test/model", "auto") is None
+    def test_resolve_reasoning_auto(self):
+        assert OpenRouterClient._resolve_reasoning_effort("auto") is None
 
-    def test_resolve_reasoning_auto_with_support(self):
-        result = self.client._resolve_reasoning_effort("test/reasoning-model", "auto")
-        assert result is not None
+    def test_resolve_reasoning_low(self):
+        assert OpenRouterClient._resolve_reasoning_effort("low") == "low"
+
+    def test_resolve_reasoning_none_value(self):
+        assert OpenRouterClient._resolve_reasoning_effort(None) is None
 
 
-class TestFetchPricing:
-    def test_fetch_pricing_caches(self):
-        client = OpenRouterClient.__new__(OpenRouterClient)
-        client.api_key = "test"
-        client._pricing_cache = {"cached/model": ModelPricing(0.1, 0.2)}
-        client._reasoning_models = set()
-
-        result = client.fetch_pricing()
-        assert "cached/model" in result
-
+class TestFetchPublicPricing:
     @patch("src.openrouter_client.requests.get")
-    def test_fetch_pricing_from_api(self, mock_get):
-        client = OpenRouterClient.__new__(OpenRouterClient)
-        client.api_key = "test"
-        client._pricing_cache = {}
-        client._reasoning_models = set()
-
+    def test_fetch_public_models(self, mock_get):
         mock_get.return_value.json.return_value = {
             "data": [
                 {
@@ -220,7 +199,45 @@ class TestFetchPricing:
         }
         mock_get.return_value.raise_for_status = MagicMock()
 
-        result = client.fetch_pricing()
-        assert "api/model" in result
-        assert result["api/model"].prompt_price == 0.001
-        assert client.supports_reasoning("api/model")
+        models = OpenRouterClient.fetch_public_models()
+        assert len(models) == 1
+        assert models[0]["id"] == "api/model"
+
+    @patch("src.openrouter_client.requests.get")
+    def test_fetch_public_pricing(self, mock_get):
+        mock_get.return_value.json.return_value = {
+            "data": [
+                {
+                    "id": "api/model",
+                    "pricing": {"prompt": "0.001", "completion": "0.002"},
+                },
+            ],
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
+
+        pricing = OpenRouterClient.fetch_public_pricing()
+        assert "api/model" in pricing
+        assert pricing["api/model"].prompt_price == 0.001
+
+
+class TestFetchAvailableModels:
+    @patch("src.openrouter_client.requests.get")
+    def test_fetches_and_caches(self, mock_get):
+        client = OpenRouterClient.__new__(OpenRouterClient)
+        client.api_key = "test"
+        client._base_url = "https://openrouter.ai/api/v1"
+        client._known_models = None
+
+        mock_get.return_value.json.return_value = {
+            "data": [{"id": "model/a"}, {"id": "model/b"}],
+        }
+        mock_get.return_value.raise_for_status = MagicMock()
+
+        result = client.fetch_available_models()
+        assert "model/a" in result
+        assert "model/b" in result
+        assert mock_get.call_count == 1
+
+        # Second call uses cache
+        client.fetch_available_models()
+        assert mock_get.call_count == 1

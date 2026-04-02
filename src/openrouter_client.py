@@ -13,15 +13,18 @@ from openai import OpenAI
 
 from src.config import (
     API_CALL_TIMEOUT,
-    OPENROUTER_BASE_URL,
-    OPENROUTER_MODELS_URL,
     OPENROUTER_APP_NAME,
     OPENROUTER_APP_URL,
+    get_openrouter_base_url,
     get_reasoning_effort,
     ModelPricing,
 )
 
 log = logging.getLogger(__name__)
+
+OPENROUTER_PUBLIC_MODELS_URL = "https://openrouter.ai/api/v1/models"
+
+MAX_RETRY_WAIT = 30.0
 
 
 @dataclass
@@ -43,17 +46,33 @@ class CompletionResult:
     reasoning_content: str | None = None
 
 
-def _usage_from_openrouter_response(
+def _extract_cost(usage_obj: Any) -> float | None:
+    """Try to extract the actual cost from an OpenRouter usage object.
+
+    Returns USD cost as float, or None if the field is absent / unparseable.
+    """
+    raw = getattr(usage_obj, "cost", None)
+    if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+        return float(raw)
+    if isinstance(raw, str) and raw.strip():
+        try:
+            return float(raw)
+        except ValueError:
+            return None
+    return None
+
+
+def _usage_from_response(
     *,
-    model: str,
     response: Any,
     elapsed: float,
-    get_model_pricing: Any,
 ) -> UsageInfo:
-    """Build UsageInfo from an OpenRouter chat completion response.
+    """Build UsageInfo from an OpenRouter / OpenAI chat completion response.
 
-    Prefers OpenRouter's ``usage.cost`` (actual USD charged) when present,
-    falling back to token counts * list prices.
+    Uses the per-request ``usage.cost`` field returned by OpenRouter (and by
+    proxies that forward it) as the authoritative cost.  Falls back to zero
+    when the field is absent — we never pre-fetch the pricing catalog just
+    for this.
     """
     usage = UsageInfo(elapsed_seconds=elapsed)
     if not response.usage:
@@ -63,39 +82,25 @@ def _usage_from_openrouter_response(
     usage.prompt_tokens = int(ru.prompt_tokens or 0)
     usage.completion_tokens = int(ru.completion_tokens or 0)
 
-    raw_cost = getattr(ru, "cost", None)
-    used_api_cost = False
-    if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool):
-        usage.cost_usd = float(raw_cost)
-        used_api_cost = True
-    elif isinstance(raw_cost, str) and raw_cost.strip():
-        try:
-            usage.cost_usd = float(raw_cost)
-            used_api_cost = True
-        except ValueError:
-            pass
-
-    if not used_api_cost:
-        pricing = get_model_pricing(model)
-        usage.cost_usd = (
-            usage.prompt_tokens * pricing.prompt_price
-            + usage.completion_tokens * pricing.completion_price
-        )
+    cost = _extract_cost(ru)
+    usage.cost_usd = cost if cost is not None else 0.0
     return usage
 
 
 class OpenRouterClient:
     """Thin wrapper around the OpenAI SDK pointed at OpenRouter."""
 
-    MAX_RETRIES = 5
-    RETRY_BACKOFF_BASE = 3.0
+    MAX_RETRIES = 3
+    RETRY_BACKOFF_BASE = 2.0
     RETRYABLE_STATUS_CODES = {402, 429, 500, 502, 503}
-    EMPTY_CONTENT_RETRIES = 2
+    EMPTY_CONTENT_RETRIES = 1
 
     def __init__(self, api_key: str, timeout: float = API_CALL_TIMEOUT) -> None:
         self.api_key = api_key
+        self._base_url = get_openrouter_base_url()
+        self._timeout = timeout
         self._client = OpenAI(
-            base_url=OPENROUTER_BASE_URL,
+            base_url=self._base_url,
             api_key=api_key,
             timeout=httpx.Timeout(timeout, connect=10.0),
             default_headers={
@@ -103,55 +108,58 @@ class OpenRouterClient:
                 "X-Title": OPENROUTER_APP_NAME,
             },
         )
-        self._pricing_cache: dict[str, ModelPricing] = {}
-        self._reasoning_models: set[str] = set()
+        self._known_models: set[str] | None = None
 
     # ------------------------------------------------------------------
-    # Pricing
+    # Model discovery (public OpenRouter API, no auth needed)
     # ------------------------------------------------------------------
 
-    def fetch_pricing(self) -> dict[str, ModelPricing]:
-        """Fetch pricing for all models from OpenRouter (cached in memory)."""
-        if self._pricing_cache:
-            return self._pricing_cache
+    @staticmethod
+    def fetch_public_models() -> list[dict[str, Any]]:
+        """Fetch the full model list from the real OpenRouter API (no key needed).
 
+        Returns raw model dicts with id, pricing, supported_parameters, etc.
+        """
+        resp = requests.get(OPENROUTER_PUBLIC_MODELS_URL, timeout=30)
+        resp.raise_for_status()
+        return resp.json().get("data", [])
+
+    @staticmethod
+    def fetch_public_pricing() -> dict[str, ModelPricing]:
+        """Fetch per-model pricing from the real OpenRouter API (no key needed)."""
+        models = OpenRouterClient.fetch_public_models()
+        result: dict[str, ModelPricing] = {}
+        for m in models:
+            mid = m.get("id", "")
+            p = m.get("pricing", {})
+            result[mid] = ModelPricing(
+                prompt_price=float(p.get("prompt", "0")),
+                completion_price=float(p.get("completion", "0")),
+            )
+        return result
+
+    def fetch_available_models(self) -> set[str]:
+        """Fetch model IDs available through the configured endpoint (proxy or direct)."""
+        if self._known_models is not None:
+            return self._known_models
+        url = self._base_url.rstrip("/") + "/models"
         resp = requests.get(
-            OPENROUTER_MODELS_URL,
+            url,
             headers={"Authorization": f"Bearer {self.api_key}"},
-            timeout=30,
+            timeout=15,
         )
         resp.raise_for_status()
-        data = resp.json().get("data", [])
-
-        for model in data:
-            model_id = model.get("id", "")
-            pricing = model.get("pricing", {})
-            prompt_price = float(pricing.get("prompt", "0"))
-            completion_price = float(pricing.get("completion", "0"))
-            self._pricing_cache[model_id] = ModelPricing(
-                prompt_price=prompt_price,
-                completion_price=completion_price,
-            )
-            supported_params = model.get("supported_parameters", [])
-            if "reasoning" in supported_params:
-                self._reasoning_models.add(model_id)
-
-        return self._pricing_cache
-
-    def supports_reasoning(self, model_id: str) -> bool:
-        if not self._pricing_cache:
-            self.fetch_pricing()
-        return model_id in self._reasoning_models
-
-    def get_model_pricing(self, model_id: str) -> ModelPricing:
-        if not self._pricing_cache:
-            self.fetch_pricing()
-        return self._pricing_cache.get(model_id, ModelPricing())
+        self._known_models = {
+            m.get("id", "") for m in resp.json().get("data", [])
+        }
+        return self._known_models
 
     def validate_model(self, model_id: str) -> bool:
-        if not self._pricing_cache:
-            self.fetch_pricing()
-        return model_id in self._pricing_cache
+        """Check if a model is available on the configured endpoint."""
+        try:
+            return model_id in self.fetch_available_models()
+        except Exception:
+            return True  # optimistic: assume available on network errors
 
     # ------------------------------------------------------------------
     # Chat completion
@@ -168,7 +176,7 @@ class OpenRouterClient:
         provider: str | None = None,
     ) -> CompletionResult:
         """Send a chat completion request with retry logic for empty responses."""
-        use_reasoning = self._resolve_reasoning_effort(model, reasoning_effort)
+        use_reasoning = self._resolve_reasoning_effort(reasoning_effort)
         accumulated = UsageInfo()
 
         for attempt in range(1, self.EMPTY_CONTENT_RETRIES + 2):
@@ -191,7 +199,11 @@ class OpenRouterClient:
                 return result
 
             if attempt <= self.EMPTY_CONTENT_RETRIES:
-                reason = "reasoning_only" if result.usage.completion_tokens > 0 else f"error_or_empty (finish_reason={result.finish_reason})"
+                reason = (
+                    "reasoning_only"
+                    if result.usage.completion_tokens > 0
+                    else f"error_or_empty (finish_reason={result.finish_reason})"
+                )
                 log.warning(
                     "%s: empty response (%s, %d tokens), retry %d/%d",
                     model, reason,
@@ -207,16 +219,18 @@ class OpenRouterClient:
 
         return result  # type: ignore[possibly-undefined]
 
-    def _resolve_reasoning_effort(
-        self, model: str, override: str | None
-    ) -> str | None:
-        if override == "off":
+    @staticmethod
+    def _resolve_reasoning_effort(override: str | None) -> str | None:
+        """Resolve reasoning effort from the caller-provided override.
+
+        The explicit value from the model config is authoritative — no need
+        to probe the models endpoint.
+        """
+        if override is None or override in ("off", "none"):
             return None
-        if override is not None and override != "auto":
-            return override
-        if not self.supports_reasoning(model):
+        if override == "auto":
             return None
-        return get_reasoning_effort(model)
+        return override
 
     def _chat_single(
         self,
@@ -256,6 +270,11 @@ class OpenRouterClient:
                 response = self._client.chat.completions.create(**kwargs)
                 elapsed = time.monotonic() - t0
 
+                if elapsed > 30:
+                    log.info(
+                        "%s: slow response (%.1fs)", model, elapsed,
+                    )
+
                 finish_reason = ""
                 content = ""
                 if response.choices:
@@ -274,11 +293,9 @@ class OpenRouterClient:
                         if raw_rc and isinstance(raw_rc, str):
                             reasoning_content = raw_rc.strip()
 
-                usage = _usage_from_openrouter_response(
-                    model=model,
+                usage = _usage_from_response(
                     response=response,
                     elapsed=elapsed,
-                    get_model_pricing=self.get_model_pricing,
                 )
 
                 return CompletionResult(
@@ -294,7 +311,15 @@ class OpenRouterClient:
                 status_code = getattr(e, "status_code", None)
                 if status_code and status_code in self.RETRYABLE_STATUS_CODES:
                     if attempt < self.MAX_RETRIES:
-                        wait = self.RETRY_BACKOFF_BASE ** (attempt + 1)
+                        wait = min(
+                            self.RETRY_BACKOFF_BASE ** (attempt + 1),
+                            MAX_RETRY_WAIT,
+                        )
+                        log.warning(
+                            "%s: HTTP %s, retry %d/%d in %.0fs",
+                            model, status_code, attempt + 1,
+                            self.MAX_RETRIES, wait,
+                        )
                         time.sleep(wait)
                         continue
                 raise

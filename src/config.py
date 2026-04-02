@@ -46,11 +46,10 @@ OBSERVER_CALLS = 3
 # ---------------------------------------------------------------------------
 # OpenRouter
 # ---------------------------------------------------------------------------
-OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models"
+_DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_APP_NAME = "persona-decay-bench"
 OPENROUTER_APP_URL = "https://github.com/mikhailsal/persona-decay-bench"
-API_CALL_TIMEOUT = 120
+API_CALL_TIMEOUT = 60
 
 # ---------------------------------------------------------------------------
 # Reasoning model support
@@ -121,16 +120,34 @@ def ensure_dirs() -> None:
 # API key
 # ---------------------------------------------------------------------------
 
-def load_api_key(*, required: bool = True) -> str:
-    """Load the OpenRouter API key from environment or .env file."""
+def _load_env() -> None:
+    """Load .env file once (idempotent thanks to dotenv internals)."""
     load_dotenv(ENV_PATH)
-    key = os.environ.get("OPENROUTER_API_KEY", "").strip()
-    if (not key or key == "sk-or-your-key-here") and required:
+
+
+def get_openrouter_base_url() -> str:
+    """Return the OpenRouter base URL from environment or the default."""
+    _load_env()
+    url = os.environ.get("OPENROUTER_BASE_URL", "").strip()
+    return url if url else _DEFAULT_OPENROUTER_BASE_URL
+
+
+def load_api_key(*, required: bool = True) -> str:
+    """Load the OpenRouter API key from environment or .env file.
+
+    Checks OPENROUTER_KEY first, then OPENROUTER_API_KEY for compatibility.
+    """
+    _load_env()
+    key = os.environ.get("OPENROUTER_KEY", "").strip()
+    if not key:
+        key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    placeholder = key in ("", "sk-or-your-key-here")
+    if placeholder and required:
         print(
-            "ERROR: OPENROUTER_API_KEY is not set.\n"
+            "ERROR: OpenRouter API key is not set.\n"
             f"  Create a .env file at {ENV_PATH} with:\n"
-            "  OPENROUTER_API_KEY=sk-or-...\n"
-            "  Or export it as an environment variable.",
+            "  OPENROUTER_KEY=your-key-here\n"
+            "  Or export OPENROUTER_KEY / OPENROUTER_API_KEY as an environment variable.",
             file=sys.stderr,
         )
         sys.exit(1)

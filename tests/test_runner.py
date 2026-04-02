@@ -137,7 +137,8 @@ class TestRunConversation:
     @patch("src.runner.load_conversation")
     @patch("src.runner.conversation_exists", return_value=True)
     def test_skips_cached_conversation(self, mock_exists, mock_load):
-        mock_load.return_value = [{"turn": i} for i in range(37)]
+        # expected_messages = 2 + 2 * max_turns; default max_turns=36 => 74
+        mock_load.return_value = [{"turn": i} for i in range(74)]
 
         client = MagicMock()
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
@@ -167,20 +168,18 @@ class TestRunConversation:
 
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
 
-        # Participant turns are odd (1,3,5,7,...), partner turns are even (2,4,6,...).
-        # Checkpoints fire after participant turns, so use an odd turn number.
         result = run_conversation(
             client=client,
             model_config=cfg,
             run_number=1,
             conversation_id="cp-conv",
-            max_turns=8,
-            checkpoint_turns=[5],
+            max_turns=6,
+            checkpoint_turns=[6],
         )
 
         assert mock_save_cp.call_count >= 1
         cp_call = mock_save_cp.call_args
-        assert cp_call[0][3] == 5  # turn number
+        assert cp_call[0][3] == 6  # exchange round number
 
     @patch("src.runner.append_turn")
     @patch("src.runner.save_checkpoint")
@@ -203,4 +202,7 @@ class TestRunConversation:
         turn_numbers = [t["turn"] for t in result["turns"]]
         assert 0 in turn_numbers  # task
         assert 1 in turn_numbers  # first participant
-        assert max(turn_numbers) <= 4
+        # 4 exchanges: task(0) + init(1) + 4*(partner+participant) = 10 messages
+        assert len(result["turns"]) == 2 + 2 * 4
+        exchanges = [t.get("exchange") for t in result["turns"] if t.get("exchange") is not None]
+        assert max(exchanges) == 4

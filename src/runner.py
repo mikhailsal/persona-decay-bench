@@ -159,10 +159,12 @@ def run_conversation(
     conv_id = conversation_id or _generate_conversation_id()
     checkpoints = checkpoint_turns or CHECKPOINT_TURNS
 
+    # A complete conversation has: 1 task + 1 initial response + 2 * max_turns exchanges
+    expected_messages = 2 + 2 * max_turns
     if conversation_exists(config_dir, run_number, conv_id):
         existing_turns = load_conversation(config_dir, run_number, conv_id)
-        if existing_turns and len(existing_turns) >= max_turns + 1:
-            log.info("Conversation %s already complete (%d turns)", conv_id, len(existing_turns))
+        if existing_turns and len(existing_turns) >= expected_messages:
+            log.info("Conversation %s already complete (%d messages)", conv_id, len(existing_turns))
             return {
                 "conversation_id": conv_id,
                 "model_config": model_config,
@@ -202,6 +204,7 @@ def run_conversation(
 
     participant_turn = {
         "turn": 1,
+        "exchange": 0,
         "role": "participant",
         "content": result.content,
         "cost_usd": result.usage.cost_usd,
@@ -210,10 +213,11 @@ def run_conversation(
     }
     turns.append(participant_turn)
     append_turn(config_dir, run_number, conv_id, participant_turn)
-    console.print(f"    Turn  1 [participant]: {result.content[:80]}...")
+    console.print(f"    Init   [participant]: {result.content[:80]}...")
 
-    turn_number = 2
-    while turn_number <= max_turns:
+    msg_number = 2  # sequential message counter (0=task, 1=first participant)
+    exchange_round = 1  # counts complete partner+participant exchanges
+    while exchange_round <= max_turns:
         # Partner generates a follow-up question
         partner_messages = _build_partner_messages(turns)
         partner_result = client.chat(
@@ -225,7 +229,8 @@ def run_conversation(
         total_cost_usd += partner_result.usage.cost_usd
 
         partner_turn_data = {
-            "turn": turn_number,
+            "turn": msg_number,
+            "exchange": exchange_round,
             "role": "partner",
             "content": partner_result.content,
             "cost_usd": partner_result.usage.cost_usd,
@@ -233,11 +238,8 @@ def run_conversation(
         }
         turns.append(partner_turn_data)
         append_turn(config_dir, run_number, conv_id, partner_turn_data)
-        console.print(f"    Turn {turn_number:2d} [partner]:     {partner_result.content[:80]}...")
-
-        turn_number += 1
-        if turn_number > max_turns:
-            break
+        console.print(f"    Turn {exchange_round:2d} [partner]:     {partner_result.content[:80]}...")
+        msg_number += 1
 
         # Target model responds
         target_messages = _build_target_messages(turns)
@@ -252,7 +254,8 @@ def run_conversation(
         total_cost_usd += target_result.usage.cost_usd
 
         participant_turn_data = {
-            "turn": turn_number,
+            "turn": msg_number,
+            "exchange": exchange_round,
             "role": "participant",
             "content": target_result.content,
             "cost_usd": target_result.usage.cost_usd,
@@ -261,23 +264,24 @@ def run_conversation(
         }
         turns.append(participant_turn_data)
         append_turn(config_dir, run_number, conv_id, participant_turn_data)
-        console.print(f"    Turn {turn_number:2d} [participant]: {target_result.content[:80]}...")
+        console.print(f"    Turn {exchange_round:2d} [participant]: {target_result.content[:80]}...")
+        msg_number += 1
 
-        # Checkpoint: collect self-report at designated turns
-        if turn_number in checkpoints:
-            console.print(f"    ── Checkpoint at turn {turn_number} ──")
-            sr_data = _collect_self_report(client, model_config, turns, turn_number)
+        # Checkpoint: collect self-report at designated exchange rounds
+        if exchange_round in checkpoints:
+            console.print(f"    ── Checkpoint at exchange {exchange_round} ──")
+            sr_data = _collect_self_report(client, model_config, turns, exchange_round)
             total_cost_usd += sr_data["cost"]["cost_usd"]
 
             checkpoint_data = {
-                "turn": turn_number,
+                "turn": exchange_round,
                 "self_report": sr_data,
                 "conversation_snapshot_turns": len(turns),
             }
-            save_checkpoint(config_dir, run_number, conv_id, turn_number, checkpoint_data)
+            save_checkpoint(config_dir, run_number, conv_id, exchange_round, checkpoint_data)
             console.print(f"    ── Self-report collected (${sr_data['cost']['cost_usd']:.4f}) ──")
 
-        turn_number += 1
+        exchange_round += 1
 
     console.print(
         Text(f"  [{model_config.label}] Conversation {conv_id} complete. "

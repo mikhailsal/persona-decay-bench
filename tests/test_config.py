@@ -181,19 +181,29 @@ class TestEnsureDirs:
 
 
 class TestLoadApiKey:
-    def test_loads_from_env(self):
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "sk-test-key"}):
+    def test_loads_from_env_openrouter_key(self):
+        with patch.dict(os.environ, {"OPENROUTER_KEY": "sk-test-key", "OPENROUTER_API_KEY": ""}, clear=False):
             key = load_api_key()
             assert key == "sk-test-key"
 
+    def test_loads_from_env_openrouter_api_key(self):
+        with patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": "sk-fallback"}, clear=False):
+            key = load_api_key()
+            assert key == "sk-fallback"
+
+    def test_openrouter_key_takes_priority(self):
+        with patch.dict(os.environ, {"OPENROUTER_KEY": "primary", "OPENROUTER_API_KEY": "fallback"}, clear=False):
+            key = load_api_key()
+            assert key == "primary"
+
     def test_exits_on_missing_key(self):
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=False), \
+        with patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": ""}, clear=False), \
              patch("src.config.ENV_PATH", Path("/nonexistent/.env")):
             with pytest.raises(SystemExit):
                 load_api_key()
 
     def test_not_required(self):
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": ""}, clear=False), \
+        with patch.dict(os.environ, {"OPENROUTER_KEY": "", "OPENROUTER_API_KEY": ""}, clear=False), \
              patch("src.config.ENV_PATH", Path("/nonexistent/.env")):
             key = load_api_key(required=False)
             assert key == ""
