@@ -24,19 +24,24 @@ CONFIGS_PATH = PROJECT_ROOT / "configs" / "models.yaml"
 # ---------------------------------------------------------------------------
 # Conversation parameters
 # ---------------------------------------------------------------------------
-MAX_TURNS = 36
-CHECKPOINT_TURNS = [6, 12, 18, 24, 30, 36]
+MAX_TURNS = 24
+CHECKPOINT_TURNS = [6, 12, 18, 24]
 RUNS_PER_MODEL = 5
 
 # ---------------------------------------------------------------------------
 # Token / generation limits
+#
+# Reduced from original (2048/512) after Experiment Run 1 showed:
+#   - Participant responses averaged 275-517 words (far too verbose)
+#   - Partner responses grew to 100-200+ words despite "1-3 sentences" prompt
+#   - Conversations collapsed into 10-word goodbyes after exchange ~25
 # ---------------------------------------------------------------------------
-RESPONSE_MAX_TOKENS = 2048
+RESPONSE_MAX_TOKENS = 512
 RESPONSE_TEMPERATURE = 1.0
-PARTNER_MAX_TOKENS = 512
+PARTNER_MAX_TOKENS = 150
 PARTNER_TEMPERATURE = 1.0
-SELF_REPORT_MAX_TOKENS = 1024
-OBSERVER_MAX_TOKENS = 1024
+SELF_REPORT_MAX_TOKENS = 512
+OBSERVER_MAX_TOKENS = 512
 OBSERVER_TEMPERATURE = 0.3
 
 # ---------------------------------------------------------------------------
@@ -44,7 +49,7 @@ OBSERVER_TEMPERATURE = 0.3
 # ---------------------------------------------------------------------------
 PARTNER_MODEL = "google/gemini-3.1-flash-lite-preview"
 OBSERVER_MODEL = "google/gemini-3-flash-preview"
-OBSERVER_CALLS = 3
+OBSERVER_CALLS = 1
 
 # ---------------------------------------------------------------------------
 # OpenRouter

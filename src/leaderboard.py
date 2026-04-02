@@ -10,7 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 
-from src.config import RESULTS_DIR
+from src.config import CHECKPOINT_TURNS, MAX_TURNS, OBSERVER_CALLS, RESULTS_DIR
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -195,9 +195,9 @@ def generate_markdown_report(model_scores: list[ModelScore], output_path: Path |
             "## Methodology",
             "",
             "- **Persona**: High-intensity ADHD (from Stable Personas paper, arXiv:2601.22812v1)",
-            "- **Conversation**: 36 turns with neutral partner (gemini-3.1-flash-lite)",
-            "- **Assessment**: 12-item ADHD questionnaire at turns 6, 12, 18, 24, 30, 36",
-            "- **Observer**: 3 independent gemini-3-flash-preview evaluations per checkpoint",
+            f"- **Conversation**: {MAX_TURNS} turns with neutral partner (gemini-3.1-flash-lite)",
+            f"- **Assessment**: 12-item ADHD questionnaire at turns {', '.join(str(t) for t in CHECKPOINT_TURNS)}",
+            f"- **Observer**: {OBSERVER_CALLS} gemini-3-flash-preview evaluation(s) per checkpoint",
             "- **PSI formula**: Init(20%) + Decay(40%) + SR-Consistency(15%) + Gap(10%) + Extended(15%)",
             "",
         ]

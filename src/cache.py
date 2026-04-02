@@ -6,7 +6,7 @@ Cache structure:
     checkpoint_turn_06.json     — self-report + observer assessments at turn 6
     checkpoint_turn_12.json     — ... at turn 12
     ...
-    checkpoint_turn_36.json     — ... at turn 36
+    checkpoint_turn_24.json     — ... at turn 24
 """
 
 from __future__ import annotations

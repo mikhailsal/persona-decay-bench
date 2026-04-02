@@ -7,7 +7,7 @@ Replicates findings from the "Stable Personas" paper (arXiv:2601.22812v1), which
 ## What it measures
 
 - **Initial Expression** — Can the model express a high-intensity ADHD persona convincingly?
-- **Decay Resistance** — Does persona expression hold up over 36 conversation turns?
+- **Decay Resistance** — Does persona expression hold up over 24 conversation turns?
 - **Self-Report Consistency** — Are the model's self-assessments stable across checkpoints?
 - **Observer-Self Agreement** — Do self-reports match external observer ratings?
 - **Extended Stability** — Does the model maintain persona beyond the paper's 18-turn window?
@@ -40,7 +40,7 @@ persona-decay estimate-cost
 
 ## Methodology
 
-Each model receives a high-intensity ADHD persona prompt and engages in a 36-turn conversation with a neutral partner. At 6-turn checkpoints (turns 6, 12, 18, 24, 30, 36), the model completes a 12-item ADHD self-assessment and is independently rated by 3 observer LLMs.
+Each model receives a high-intensity ADHD persona prompt and engages in a 24-turn conversation with a neutral partner. At 6-turn checkpoints (turns 6, 12, 18, 24), the model completes a 12-item ADHD self-assessment and is rated by an observer LLM.
 
 The **Persona Stability Index** (0-100) is computed from weighted dimensions:
 - Initial Expression: 20%

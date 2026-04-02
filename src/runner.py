@@ -3,7 +3,7 @@
 Flow for one conversation:
   1. Target model gets ADHD persona system prompt + workday task as first user message
   2. Neutral partner (gemini-3.1-flash-lite) generates follow-up questions
-  3. At checkpoint turns (6, 12, 18, 24, 30, 36), collect CAARS self-report
+  3. At checkpoint turns (6, 12, 18, 24), collect CAARS self-report
   4. Conversation turns are saved incrementally to JSONL
 """
 
@@ -231,6 +231,35 @@ def _run_exchange_loop(
     return total_cost
 
 
+def _build_completed_result(
+    model_config: ModelConfig,
+    conv_id: str,
+    run_number: int,
+    turns: list[dict[str, Any]],
+    total_cost_usd: float,
+) -> dict[str, Any]:
+    """Build the result dict for a completed conversation and log cost breakdown."""
+    p_cost = sum(t.get("cost_usd", 0) for t in turns if t.get("role") == "participant")
+    pr_cost = sum(t.get("cost_usd", 0) for t in turns if t.get("role") == "partner")
+    console.print(
+        Text(
+            f"  [{model_config.label}] Done {conv_id}. "
+            f"${total_cost_usd:.4f} (participant ${p_cost:.4f}, partner ${pr_cost:.4f})",
+            style="green",
+        )
+    )
+    return {
+        "conversation_id": conv_id,
+        "model_config": model_config,
+        "run": run_number,
+        "turns": turns,
+        "total_cost_usd": total_cost_usd,
+        "participant_cost_usd": p_cost,
+        "partner_cost_usd": pr_cost,
+        "status": "completed",
+    }
+
+
 def _make_task_turn() -> dict[str, Any]:
     """Build the initial task turn that kicks off the conversation."""
     return {
@@ -369,20 +398,7 @@ def run_conversation(
             verbose=verbose,
         )
 
-    console.print(
-        Text(
-            f"  [{model_config.label}] Conversation {conv_id} complete. Total cost: ${total_cost_usd:.4f}",
-            style="green",
-        )
-    )
-    return {
-        "conversation_id": conv_id,
-        "model_config": model_config,
-        "run": run_number,
-        "turns": turns,
-        "total_cost_usd": total_cost_usd,
-        "status": "completed",
-    }
+    return _build_completed_result(model_config, conv_id, run_number, turns, total_cost_usd)
 
 
 def run_all_conversations(

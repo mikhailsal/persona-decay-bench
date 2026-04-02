@@ -49,10 +49,10 @@ class TestPaths:
 
 class TestConstants:
     def test_max_turns(self):
-        assert MAX_TURNS == 36
+        assert MAX_TURNS == 24
 
     def test_checkpoint_turns(self):
-        assert CHECKPOINT_TURNS == [6, 12, 18, 24, 30, 36]
+        assert CHECKPOINT_TURNS == [6, 12, 18, 24]
 
     def test_scoring_weights_sum_to_one(self):
         assert abs(sum(SCORING_WEIGHTS.values()) - 1.0) < 1e-9
