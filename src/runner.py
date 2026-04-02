@@ -27,6 +27,7 @@ from src.config import (
     PARTNER_TEMPERATURE,
     RESPONSE_MAX_TOKENS,
     ModelConfig,
+    get_reasoning_effort,
 )
 from src.prompts import WORKDAY_TASK
 from src.runner_helpers import (
@@ -165,6 +166,7 @@ def _run_exchange_loop(
             messages=build_partner_messages(turns),
             max_tokens=PARTNER_MAX_TOKENS,
             temperature=PARTNER_TEMPERATURE,
+            reasoning_effort=get_reasoning_effort(PARTNER_MODEL),
             cache_control=True,
         )
         total_cost += partner_result.usage.cost_usd

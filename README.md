@@ -55,7 +55,7 @@ These can be combined: `--parallel 3 --parallel-runs 5` will run 3 models at onc
 
 ## Methodology
 
-Each model receives a high-intensity ADHD persona prompt and engages in a 24-turn conversation with a neutral partner. At 6-turn checkpoints (turns 6, 12, 18, 24), the model completes a 12-item ADHD self-assessment and is rated by an observer LLM.
+Each model receives a high-intensity ADHD persona prompt and engages in a 24-turn conversation with a neutral partner (grok-4.1-fast). At 6-turn checkpoints (turns 6, 12, 18, 24), the model completes a 12-item ADHD self-assessment and is rated by an observer LLM (gemini-3-flash-preview).
 
 The **Persona Stability Index** (0-100) is computed from weighted dimensions:
 - Initial Expression: 20%

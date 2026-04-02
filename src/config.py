@@ -47,7 +47,7 @@ OBSERVER_TEMPERATURE = 0.3
 # ---------------------------------------------------------------------------
 # Models
 # ---------------------------------------------------------------------------
-PARTNER_MODEL = "google/gemini-3.1-flash-lite-preview"
+PARTNER_MODEL = "x-ai/grok-4.1-fast"
 OBSERVER_MODEL = "google/gemini-3-flash-preview"
 OBSERVER_CALLS = 1
 

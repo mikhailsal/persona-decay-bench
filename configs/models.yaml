@@ -100,11 +100,12 @@ models:
 # ───────────────────────────────────────────────────────────────
 # Infrastructure models (not benchmarked — used as tools)
 # ───────────────────────────────────────────────────────────────
-# Neutral conversation partner: google/gemini-3.1-flash-lite-preview
-#   Very cheap, good instruction following. Generates follow-up
-#   questions to keep the conversation flowing naturally.
+# Neutral conversation partner: x-ai/grok-4.1-fast
+#   Switched from gemini-flash-lite in Run 3. Gemini's minimum cache
+#   threshold (4096 tokens) caused 0% partner cache hits, wasting money.
+#   Grok-4.1-fast has no such threshold and caches effectively.
 #
-# Observer evaluator: google/gemini-3-flash-preview (x3 calls)
+# Observer evaluator: google/gemini-3-flash-preview (1 call)
 #   Same judge model used in the Independence Bench. Cheap, fast,
-#   reliable for structured rating tasks. Called 3 times independently
-#   per checkpoint for inter-rater reliability.
+#   reliable for structured rating tasks. Reduced from 3 to 1 call
+#   after Run 1 showed observer SD of just 1.24 on a 36-point scale.

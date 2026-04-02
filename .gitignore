@@ -3,6 +3,7 @@
 
 # Cache (regenerable)
 cache/
+cache_backups/
 
 # Results (regenerable, except leaderboard)
 results/
