@@ -13,6 +13,7 @@ from src.runner import (
     _build_target_messages,
     _collect_self_report,
     _generate_conversation_id,
+    _inject_explicit_cache_breakpoint,
     run_conversation,
 )
 
@@ -92,8 +93,9 @@ class TestBuildPartnerMessages:
         assert messages[3]["role"] == "assistant"
 
 
-class TestCacheBreakpointCrossModel:
-    """Verify cache breakpoints work correctly for non-Gemini models (Grok 4.1)."""
+class TestMessageFormatAndCaching:
+    """Verify messages use plain string content (no array conversion) so that
+    automatic top-level caching produces stable prefix hashes across turns."""
 
     def _sample_turns(self):
         return [
@@ -103,36 +105,35 @@ class TestCacheBreakpointCrossModel:
             {"role": "participant", "content": "Then I get distracted..."},
         ]
 
-    def test_target_messages_have_cache_breakpoint(self):
+    def test_target_messages_use_plain_strings(self):
         turns = self._sample_turns()
         messages = _build_target_messages(turns)
-        last_assistant = [m for m in messages if m["role"] == "assistant"][-1]
-        assert isinstance(last_assistant["content"], list)
-        assert last_assistant["content"][0]["cache_control"] == {"type": "ephemeral"}
+        for msg in messages:
+            assert isinstance(msg["content"], str), (
+                f"Message content should be plain string, got {type(msg['content'])}"
+            )
 
-    def test_partner_messages_have_cache_breakpoint(self):
+    def test_partner_messages_use_plain_strings(self):
         turns = self._sample_turns()
         messages = _build_partner_messages(turns)
-        assistant_msgs = [m for m in messages if m["role"] == "assistant"]
-        assert len(assistant_msgs) > 0
-        last_assistant = assistant_msgs[-1]
-        assert isinstance(last_assistant["content"], list)
-        assert last_assistant["content"][0]["cache_control"] == {"type": "ephemeral"}
-
-    def test_cache_breakpoint_preserves_content(self):
-        turns = self._sample_turns()
-        messages = _build_target_messages(turns)
-        last_assistant = [m for m in messages if m["role"] == "assistant"][-1]
-        assert last_assistant["content"][0]["text"] == "Then I get distracted..."
-
-    def test_cache_disabled_skips_breakpoint(self):
-        turns = self._sample_turns()
-        messages = _build_target_messages(turns, enable_cache=False)
         for msg in messages:
-            if msg["role"] == "assistant":
-                assert isinstance(msg["content"], str)
+            assert isinstance(msg["content"], str), (
+                f"Message content should be plain string, got {type(msg['content'])}"
+            )
 
-    def test_reasoning_details_preserved_with_cache(self):
+    def test_prefix_stays_identical_across_turns(self):
+        """Messages built from a prefix of turns must be byte-identical to
+        the corresponding prefix in a later request with more turns."""
+        turns_short = self._sample_turns()[:3]
+        turns_long = self._sample_turns()
+
+        msgs_short = _build_target_messages(turns_short)
+        msgs_long = _build_target_messages(turns_long)
+
+        for i, (a, b) in enumerate(zip(msgs_short, msgs_long)):
+            assert a == b, f"Message {i} differs between short and long builds"
+
+    def test_reasoning_details_preserved(self):
         turns = [
             {"role": "task", "content": "Task"},
             {
@@ -145,7 +146,7 @@ class TestCacheBreakpointCrossModel:
         assistant_msg = messages[2]
         assert "reasoning_details" in assistant_msg
         assert assistant_msg["reasoning_details"] == [{"type": "reasoning.encrypted", "data": "abc123"}]
-        assert isinstance(assistant_msg["content"], list)
+        assert isinstance(assistant_msg["content"], str)
 
     @patch("src.runner.append_turn")
     @patch("src.runner.save_checkpoint")
@@ -199,6 +200,55 @@ class TestCacheBreakpointCrossModel:
             )
 
 
+class TestInjectExplicitCacheBreakpoint:
+    """Verify _inject_explicit_cache_breakpoint correctly marks the last message."""
+
+    def test_converts_last_message_to_array_with_cache_control(self):
+        messages = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        _inject_explicit_cache_breakpoint(messages)
+        last = messages[-1]
+        assert isinstance(last["content"], list)
+        assert len(last["content"]) == 1
+        assert last["content"][0]["type"] == "text"
+        assert last["content"][0]["text"] == "Hi there"
+        assert last["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+    def test_does_not_modify_earlier_messages(self):
+        messages = [
+            {"role": "system", "content": "System prompt"},
+            {"role": "user", "content": "Hello"},
+            {"role": "assistant", "content": "Hi there"},
+        ]
+        _inject_explicit_cache_breakpoint(messages)
+        assert isinstance(messages[0]["content"], str)
+        assert isinstance(messages[1]["content"], str)
+
+    def test_handles_empty_list(self):
+        messages: list[dict] = []
+        _inject_explicit_cache_breakpoint(messages)
+        assert messages == []
+
+    def test_single_message(self):
+        messages = [{"role": "system", "content": "System only"}]
+        _inject_explicit_cache_breakpoint(messages)
+        assert isinstance(messages[0]["content"], list)
+        assert messages[0]["content"][0]["text"] == "System only"
+
+    def test_idempotent_on_already_converted(self):
+        messages = [
+            {"role": "assistant", "content": [
+                {"type": "text", "text": "Already array", "cache_control": {"type": "ephemeral"}}
+            ]},
+        ]
+        _inject_explicit_cache_breakpoint(messages)
+        assert isinstance(messages[0]["content"], list)
+        assert len(messages[0]["content"]) == 1
+
+
 class TestCollectSelfReport:
     def test_calls_api(self):
         client = MagicMock()
@@ -215,6 +265,37 @@ class TestCollectSelfReport:
         assert "cost" in result
         assert result["cost"]["cost_usd"] == 0.001
         client.chat.assert_called_once()
+
+    def test_self_report_messages_have_cache_breakpoint_before_questionnaire(self):
+        """The self-report request must have an explicit cache breakpoint on the
+        last conversation message (right before the questionnaire) so the prefix
+        can be served from cache."""
+        client = MagicMock()
+        client.chat.return_value = _make_result('{"IN-1": 3}')
+
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+        turns = [
+            {"role": "task", "content": "Describe your workday."},
+            {"role": "participant", "content": "I start by checking emails..."},
+            {"role": "partner", "content": "What happens next?"},
+            {"role": "participant", "content": "Then I get distracted..."},
+        ]
+
+        _collect_self_report(client, cfg, turns, 6)
+
+        call_kwargs = client.chat.call_args.kwargs
+        messages = call_kwargs["messages"]
+
+        last_conv_msg = messages[-2]
+        assert isinstance(last_conv_msg["content"], list), (
+            "Second-to-last message (last conversation msg) should be array with cache_control"
+        )
+        assert last_conv_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
+        questionnaire_msg = messages[-1]
+        assert isinstance(questionnaire_msg["content"], str), (
+            "Last message (questionnaire) should be plain string"
+        )
 
 
 class TestRunConversation:

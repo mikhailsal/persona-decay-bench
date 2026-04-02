@@ -33,6 +33,7 @@ class UsageInfo:
     prompt_tokens: int = 0
     completion_tokens: int = 0
     cached_tokens: int = 0
+    cache_write_tokens: int = 0
     cost_usd: float = 0.0
     elapsed_seconds: float = 0.0
 
@@ -87,6 +88,7 @@ def _usage_from_response(
     details = getattr(ru, "prompt_tokens_details", None)
     if details:
         usage.cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
+        usage.cache_write_tokens = int(getattr(details, "cache_write_tokens", 0) or 0)
 
     cost = _extract_cost(ru)
     usage.cost_usd = cost if cost is not None else 0.0
@@ -205,6 +207,7 @@ class OpenRouterClient:
             accumulated.prompt_tokens += result.usage.prompt_tokens
             accumulated.completion_tokens += result.usage.completion_tokens
             accumulated.cached_tokens += result.usage.cached_tokens
+            accumulated.cache_write_tokens += result.usage.cache_write_tokens
             accumulated.cost_usd += result.usage.cost_usd
             accumulated.elapsed_seconds += result.usage.elapsed_seconds
 
@@ -326,9 +329,20 @@ class OpenRouterClient:
                 )
 
                 if usage.cached_tokens > 0:
+                    pct = (usage.cached_tokens / usage.prompt_tokens * 100) if usage.prompt_tokens else 0
                     log.info(
-                        "%s: cache hit — %d/%d prompt tokens cached",
-                        model, usage.cached_tokens, usage.prompt_tokens,
+                        "%s: cache READ — %d/%d prompt tokens (%.0f%%)",
+                        model, usage.cached_tokens, usage.prompt_tokens, pct,
+                    )
+                if usage.cache_write_tokens > 0:
+                    log.info(
+                        "%s: cache WRITE — %d tokens written to cache",
+                        model, usage.cache_write_tokens,
+                    )
+                if usage.cached_tokens == 0 and usage.cache_write_tokens == 0 and usage.prompt_tokens > 0:
+                    log.debug(
+                        "%s: no cache activity — %d prompt tokens",
+                        model, usage.prompt_tokens,
                     )
 
                 return CompletionResult(

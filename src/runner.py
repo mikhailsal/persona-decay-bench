@@ -46,6 +46,26 @@ log = logging.getLogger(__name__)
 console = Console()
 
 
+def _print_turn_with_cache(
+    label: str,
+    role: str,
+    content: str,
+    prompt_tokens: int,
+    cached_tokens: int,
+    cache_write_tokens: int,
+) -> None:
+    """Print a turn line with cache status."""
+    cache_info = ""
+    if cached_tokens > 0:
+        pct = (cached_tokens / prompt_tokens * 100) if prompt_tokens else 0
+        cache_info = f" [green]CACHE READ {cached_tokens}/{prompt_tokens} ({pct:.0f}%)[/green]"
+    elif cache_write_tokens > 0:
+        cache_info = f" [yellow]CACHE WRITE {cache_write_tokens} tokens[/yellow]"
+    elif prompt_tokens > 0:
+        cache_info = f" [dim]no cache ({prompt_tokens} prompt tokens)[/dim]"
+    console.print(f"    {label} [{role:11s}]: {content[:70]}...{cache_info}")
+
+
 def _generate_conversation_id() -> str:
     """Generate a short unique conversation ID."""
     return uuid.uuid4().hex[:12]
@@ -53,18 +73,17 @@ def _generate_conversation_id() -> str:
 
 def _build_target_messages(
     turns: list[dict[str, Any]],
-    *,
-    enable_cache: bool = True,
 ) -> list[dict[str, Any]]:
     """Build the message list for the target model from conversation turns.
 
     The target model sees: system prompt (persona) + all turns as user/assistant.
     Reasoning details are preserved on assistant messages to maintain reasoning
-    continuity and enable provider-side prompt caching.
+    continuity.
 
-    When ``enable_cache`` is True, a ``cache_control`` breakpoint is placed on
-    the last assistant message to enable Gemini/Anthropic prompt caching via
-    OpenRouter.
+    All messages use plain string content so that the prefix stays byte-identical
+    across requests.  Caching is driven by the top-level ``cache_control`` field
+    in the request body (automatic caching), which lets the provider place and
+    advance the cache breakpoint without format mismatches between turns.
     """
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": HIGH_ADHD_PERSONA},
@@ -84,36 +103,11 @@ def _build_target_messages(
         elif role == "task":
             messages.append({"role": "user", "content": content})
 
-    if enable_cache:
-        _inject_cache_breakpoint(messages)
-
     return messages
-
-
-def _inject_cache_breakpoint(messages: list[dict[str, Any]]) -> None:
-    """Place a cache_control breakpoint on the last assistant message.
-
-    Converts the message's ``content`` to the content-block array format
-    required by OpenRouter for Gemini/Anthropic caching.
-    """
-    for msg in reversed(messages):
-        if msg.get("role") == "assistant":
-            content = msg.get("content", "")
-            if isinstance(content, str) and content:
-                msg["content"] = [
-                    {
-                        "type": "text",
-                        "text": content,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ]
-            return
 
 
 def _build_partner_messages(
     turns: list[dict[str, Any]],
-    *,
-    enable_cache: bool = True,
 ) -> list[dict[str, Any]]:
     """Build the message list for the neutral partner.
 
@@ -133,10 +127,41 @@ def _build_partner_messages(
         elif role == "task":
             messages.append({"role": "user", "content": content})
 
-    if enable_cache:
-        _inject_cache_breakpoint(messages)
-
     return messages
+
+
+def _inject_explicit_cache_breakpoint(messages: list[dict[str, Any]]) -> None:
+    """Add an explicit ``cache_control`` breakpoint on the last message.
+
+    Automatic caching always places its breakpoint on the very last block of a
+    request.  When the self-report questionnaire is appended *after* the
+    conversation history, the automatic breakpoint lands on the questionnaire
+    (new content every time) rather than on the conversation prefix that the
+    prior turn already wrote to cache.  As a result the lookback never finds the
+    prior entry and the entire prefix is re-written.
+
+    By placing an explicit breakpoint on the last conversation message (the one
+    right before the questionnaire), we ensure the cache system checks that
+    exact position first.  Since the prior conversation turn wrote its automatic
+    cache entry at the same position, the prefix hash matches and we get a
+    cache read instead of a full write.
+
+    The content is converted to ``[{"type": "text", ...}]`` array form only for
+    this single message to attach the ``cache_control`` marker; the rest of the
+    messages remain plain strings so that prefix identity is preserved.
+    """
+    if not messages:
+        return
+    last = messages[-1]
+    content = last.get("content", "")
+    if isinstance(content, str):
+        last["content"] = [
+            {
+                "type": "text",
+                "text": content,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
 
 
 def _collect_self_report(
@@ -148,19 +173,26 @@ def _collect_self_report(
     """Collect CAARS self-report from the target model at a checkpoint.
 
     Sends a separate API call with the persona prompt + conversation history +
-    self-report questionnaire.
+    self-report questionnaire.  An explicit cache breakpoint is placed on the
+    last conversation message so the lookback finds the entry written by the
+    preceding turn, avoiding a full cache re-write of the entire prefix.
     """
     target_messages = _build_target_messages(turns)
+    _inject_explicit_cache_breakpoint(target_messages)
     target_messages.append({
         "role": "user",
         "content": build_self_report_prompt(),
     })
 
+    # Use the same temperature and max_tokens as conversation turns so the
+    # prompt cache entry written by the preceding turn can be reused.
+    # OpenRouter/Anthropic includes these parameters in the cache key despite
+    # Anthropic's docs not listing them as cache invalidators.
     result = client.chat(
         model=model_config.model_id,
         messages=target_messages,
-        max_tokens=SELF_REPORT_MAX_TOKENS,
-        temperature=0.3,
+        max_tokens=RESPONSE_MAX_TOKENS,
+        temperature=model_config.effective_temperature,
         reasoning_effort=model_config.effective_reasoning,
         provider=model_config.provider,
         cache_control=True,
@@ -254,7 +286,9 @@ def run_conversation(
         "content": result.content,
         "cost_usd": result.usage.cost_usd,
         "tokens": result.usage.prompt_tokens + result.usage.completion_tokens,
+        "prompt_tokens": result.usage.prompt_tokens,
         "cached_tokens": result.usage.cached_tokens,
+        "cache_write_tokens": result.usage.cache_write_tokens,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     if result.reasoning_details:
@@ -263,7 +297,10 @@ def run_conversation(
         participant_turn["reasoning_content"] = result.reasoning_content
     turns.append(participant_turn)
     append_turn(config_dir, run_number, conv_id, participant_turn)
-    console.print(f"    Init   [participant]: {result.content[:80]}...")
+    _print_turn_with_cache(
+        "Init  ", "participant", result.content, result.usage.prompt_tokens,
+        result.usage.cached_tokens, result.usage.cache_write_tokens,
+    )
 
     msg_number = 2  # sequential message counter (0=task, 1=first participant)
     exchange_round = 1  # counts complete partner+participant exchanges
@@ -285,12 +322,18 @@ def run_conversation(
             "role": "partner",
             "content": partner_result.content,
             "cost_usd": partner_result.usage.cost_usd,
+            "prompt_tokens": partner_result.usage.prompt_tokens,
             "cached_tokens": partner_result.usage.cached_tokens,
+            "cache_write_tokens": partner_result.usage.cache_write_tokens,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         turns.append(partner_turn_data)
         append_turn(config_dir, run_number, conv_id, partner_turn_data)
-        console.print(f"    Turn {exchange_round:2d} [partner]:     {partner_result.content[:80]}...")
+        _print_turn_with_cache(
+            f"Turn {exchange_round:2d}", "partner", partner_result.content,
+            partner_result.usage.prompt_tokens, partner_result.usage.cached_tokens,
+            partner_result.usage.cache_write_tokens,
+        )
         msg_number += 1
 
         # Target model responds
@@ -313,7 +356,9 @@ def run_conversation(
             "content": target_result.content,
             "cost_usd": target_result.usage.cost_usd,
             "tokens": target_result.usage.prompt_tokens + target_result.usage.completion_tokens,
+            "prompt_tokens": target_result.usage.prompt_tokens,
             "cached_tokens": target_result.usage.cached_tokens,
+            "cache_write_tokens": target_result.usage.cache_write_tokens,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         if target_result.reasoning_details:
@@ -322,7 +367,11 @@ def run_conversation(
             participant_turn_data["reasoning_content"] = target_result.reasoning_content
         turns.append(participant_turn_data)
         append_turn(config_dir, run_number, conv_id, participant_turn_data)
-        console.print(f"    Turn {exchange_round:2d} [participant]: {target_result.content[:80]}...")
+        _print_turn_with_cache(
+            f"Turn {exchange_round:2d}", "participant", target_result.content,
+            target_result.usage.prompt_tokens, target_result.usage.cached_tokens,
+            target_result.usage.cache_write_tokens,
+        )
         msg_number += 1
 
         # Checkpoint: collect self-report at designated exchange rounds
