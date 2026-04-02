@@ -1,0 +1,42 @@
+# Secrets
+.env
+
+# Cache (regenerable)
+cache/
+
+# Results (regenerable, except leaderboard)
+results/
+!results/LEADERBOARD.md
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.cursor/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temp
+tmp/
+
+# Coverage reports (generated)
+.coverage
+coverage.json
+htmlcov/
+
+# Paper files (not part of the benchmark code)
+*.pdf
+2601.22812v1-*
