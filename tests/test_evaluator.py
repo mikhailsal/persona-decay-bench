@@ -157,6 +157,28 @@ class TestRunObserverAssessment:
         result = run_observer_assessment(client, turns, up_to_turn=6, n_calls=1)
         assert len(result["observer_ratings"]) == 1
 
+    def test_sends_cache_control(self):
+        """Observer calls must enable prompt caching for Gemini models."""
+        client = MagicMock()
+        valid_response = '{"IN-1": 2, "IN-2": 2, "IN-3": 2, "IN-4": 2, "HY-1": 2, "HY-2": 2, "HY-3": 2, "HY-4": 2, "IM-1": 2, "IM-2": 2, "IM-3": 2, "IM-4": 2}'
+        client.chat.return_value = CompletionResult(
+            content=valid_response,
+            usage=UsageInfo(cost_usd=0.01),
+            model="observer",
+            finish_reason="stop",
+        )
+
+        turns = [{"turn": 1, "role": "participant", "content": "Hello"}]
+        run_observer_assessment(client, turns, up_to_turn=6, n_calls=1)
+
+        call_kwargs = client.chat.call_args
+        assert call_kwargs.kwargs.get("cache_control") is True
+
+        messages = call_kwargs.kwargs.get("messages") or call_kwargs.args[1]
+        user_msg = [m for m in messages if m["role"] == "user"][0]
+        assert isinstance(user_msg["content"], list)
+        assert user_msg["content"][0]["cache_control"] == {"type": "ephemeral"}
+
 
 class TestComputeICC:
     def test_perfect_agreement(self):

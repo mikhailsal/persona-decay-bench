@@ -184,6 +184,20 @@ class TestOpenRouterClient:
     def test_resolve_reasoning_none_value(self):
         assert OpenRouterClient._resolve_reasoning_effort(None) is None
 
+    def test_chat_with_cache_control(self):
+        mock_response = _make_mock_response(content="Cached response", cost=0.01)
+        self.client._client.chat.completions.create.return_value = mock_response
+
+        result = self.client.chat(
+            "test/model",
+            [{"role": "user", "content": "hi"}],
+            cache_control=True,
+        )
+        assert result.content == "Cached response"
+        call_kwargs = self.client._client.chat.completions.create.call_args[1]
+        assert "extra_body" in call_kwargs
+        assert call_kwargs["extra_body"]["cache_control"] == {"type": "ephemeral"}
+
 
 class TestFetchPublicPricing:
     @patch("src.openrouter_client.requests.get")

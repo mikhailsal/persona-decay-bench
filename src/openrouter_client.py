@@ -180,8 +180,14 @@ class OpenRouterClient:
         *,
         reasoning_effort: str | None = None,
         provider: str | None = None,
+        cache_control: bool = False,
     ) -> CompletionResult:
-        """Send a chat completion request with retry logic for empty responses."""
+        """Send a chat completion request with retry logic for empty responses.
+
+        When ``cache_control`` is True, a request-level ``cache_control``
+        directive is added so that OpenRouter activates prompt caching for
+        providers that require an explicit opt-in (e.g. Gemini 3.x).
+        """
         use_reasoning = self._resolve_reasoning_effort(reasoning_effort)
         accumulated = UsageInfo()
 
@@ -193,6 +199,7 @@ class OpenRouterClient:
                 temperature=temperature,
                 reasoning_effort=use_reasoning,
                 provider=provider,
+                cache_control=cache_control,
             )
 
             accumulated.prompt_tokens += result.usage.prompt_tokens
@@ -247,6 +254,7 @@ class OpenRouterClient:
         temperature: float,
         reasoning_effort: str | None = None,
         provider: str | None = None,
+        cache_control: bool = False,
     ) -> CompletionResult:
         """Execute a single chat completion with error retry logic and timing."""
         last_error: Exception | None = None
@@ -263,6 +271,10 @@ class OpenRouterClient:
                         "order": [provider],
                         "allow_fallbacks": False,
                     }
+
+                if cache_control:
+                    extra_body = extra_body or {}
+                    extra_body["cache_control"] = {"type": "ephemeral"}
 
                 kwargs: dict[str, Any] = {
                     "model": model,

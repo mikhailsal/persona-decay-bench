@@ -158,9 +158,15 @@ def run_observer_assessment(
     total_cost = 0.0
 
     for call_idx in range(n_calls):
-        messages = [
+        messages: list[dict[str, Any]] = [
             {"role": "system", "content": "You are an expert behavioral psychologist trained in ADHD assessment."},
-            {"role": "user", "content": observer_prompt},
+            {"role": "user", "content": [
+                {
+                    "type": "text",
+                    "text": observer_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ]},
         ]
 
         result = client.chat(
@@ -168,6 +174,7 @@ def run_observer_assessment(
             messages=messages,
             max_tokens=OBSERVER_MAX_TOKENS,
             temperature=OBSERVER_TEMPERATURE,
+            cache_control=True,
         )
         total_cost += result.usage.cost_usd
 
