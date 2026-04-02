@@ -53,35 +53,74 @@ def _generate_conversation_id() -> str:
 
 def _build_target_messages(
     turns: list[dict[str, Any]],
-) -> list[dict[str, str]]:
+    *,
+    enable_cache: bool = True,
+) -> list[dict[str, Any]]:
     """Build the message list for the target model from conversation turns.
 
     The target model sees: system prompt (persona) + all turns as user/assistant.
+    Reasoning details are preserved on assistant messages to maintain reasoning
+    continuity and enable provider-side prompt caching.
+
+    When ``enable_cache`` is True, a ``cache_control`` breakpoint is placed on
+    the last assistant message to enable Gemini/Anthropic prompt caching via
+    OpenRouter.
     """
-    messages: list[dict[str, str]] = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": HIGH_ADHD_PERSONA},
     ]
     for turn in turns:
         role = turn.get("role", "")
         content = turn.get("content", "")
         if role == "participant":
-            messages.append({"role": "assistant", "content": content})
+            msg: dict[str, Any] = {"role": "assistant", "content": content}
+            if turn.get("reasoning_details"):
+                msg["reasoning_details"] = turn["reasoning_details"]
+            elif turn.get("reasoning_content"):
+                msg["reasoning"] = turn["reasoning_content"]
+            messages.append(msg)
         elif role == "partner":
             messages.append({"role": "user", "content": content})
         elif role == "task":
             messages.append({"role": "user", "content": content})
+
+    if enable_cache:
+        _inject_cache_breakpoint(messages)
+
     return messages
+
+
+def _inject_cache_breakpoint(messages: list[dict[str, Any]]) -> None:
+    """Place a cache_control breakpoint on the last assistant message.
+
+    Converts the message's ``content`` to the content-block array format
+    required by OpenRouter for Gemini/Anthropic caching.
+    """
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            if isinstance(content, str) and content:
+                msg["content"] = [
+                    {
+                        "type": "text",
+                        "text": content,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
+            return
 
 
 def _build_partner_messages(
     turns: list[dict[str, Any]],
-) -> list[dict[str, str]]:
+    *,
+    enable_cache: bool = True,
+) -> list[dict[str, Any]]:
     """Build the message list for the neutral partner.
 
     The partner sees: system prompt + all turns, with participant as user
     and partner as assistant.
     """
-    messages: list[dict[str, str]] = [
+    messages: list[dict[str, Any]] = [
         {"role": "system", "content": PARTNER_SYSTEM_PROMPT},
     ]
     for turn in turns:
@@ -93,6 +132,10 @@ def _build_partner_messages(
             messages.append({"role": "assistant", "content": content})
         elif role == "task":
             messages.append({"role": "user", "content": content})
+
+    if enable_cache:
+        _inject_cache_breakpoint(messages)
+
     return messages
 
 
@@ -202,15 +245,20 @@ def run_conversation(
     )
     total_cost_usd += result.usage.cost_usd
 
-    participant_turn = {
+    participant_turn: dict[str, Any] = {
         "turn": 1,
         "exchange": 0,
         "role": "participant",
         "content": result.content,
         "cost_usd": result.usage.cost_usd,
         "tokens": result.usage.prompt_tokens + result.usage.completion_tokens,
+        "cached_tokens": result.usage.cached_tokens,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if result.reasoning_details:
+        participant_turn["reasoning_details"] = result.reasoning_details
+    elif result.reasoning_content:
+        participant_turn["reasoning_content"] = result.reasoning_content
     turns.append(participant_turn)
     append_turn(config_dir, run_number, conv_id, participant_turn)
     console.print(f"    Init   [participant]: {result.content[:80]}...")
@@ -228,12 +276,13 @@ def run_conversation(
         )
         total_cost_usd += partner_result.usage.cost_usd
 
-        partner_turn_data = {
+        partner_turn_data: dict[str, Any] = {
             "turn": msg_number,
             "exchange": exchange_round,
             "role": "partner",
             "content": partner_result.content,
             "cost_usd": partner_result.usage.cost_usd,
+            "cached_tokens": partner_result.usage.cached_tokens,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         turns.append(partner_turn_data)
@@ -253,15 +302,20 @@ def run_conversation(
         )
         total_cost_usd += target_result.usage.cost_usd
 
-        participant_turn_data = {
+        participant_turn_data: dict[str, Any] = {
             "turn": msg_number,
             "exchange": exchange_round,
             "role": "participant",
             "content": target_result.content,
             "cost_usd": target_result.usage.cost_usd,
             "tokens": target_result.usage.prompt_tokens + target_result.usage.completion_tokens,
+            "cached_tokens": target_result.usage.cached_tokens,
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
+        if target_result.reasoning_details:
+            participant_turn_data["reasoning_details"] = target_result.reasoning_details
+        elif target_result.reasoning_content:
+            participant_turn_data["reasoning_content"] = target_result.reasoning_content
         turns.append(participant_turn_data)
         append_turn(config_dir, run_number, conv_id, participant_turn_data)
         console.print(f"    Turn {exchange_round:2d} [participant]: {target_result.content[:80]}...")

@@ -32,6 +32,7 @@ class UsageInfo:
     """Token usage and cost for a single API call."""
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    cached_tokens: int = 0
     cost_usd: float = 0.0
     elapsed_seconds: float = 0.0
 
@@ -44,6 +45,7 @@ class CompletionResult:
     model: str = ""
     finish_reason: str = ""
     reasoning_content: str | None = None
+    reasoning_details: list[dict[str, Any]] | None = None
 
 
 def _extract_cost(usage_obj: Any) -> float | None:
@@ -81,6 +83,10 @@ def _usage_from_response(
     ru = response.usage
     usage.prompt_tokens = int(ru.prompt_tokens or 0)
     usage.completion_tokens = int(ru.completion_tokens or 0)
+
+    details = getattr(ru, "prompt_tokens_details", None)
+    if details:
+        usage.cached_tokens = int(getattr(details, "cached_tokens", 0) or 0)
 
     cost = _extract_cost(ru)
     usage.cost_usd = cost if cost is not None else 0.0
@@ -191,6 +197,7 @@ class OpenRouterClient:
 
             accumulated.prompt_tokens += result.usage.prompt_tokens
             accumulated.completion_tokens += result.usage.completion_tokens
+            accumulated.cached_tokens += result.usage.cached_tokens
             accumulated.cost_usd += result.usage.cost_usd
             accumulated.elapsed_seconds += result.usage.elapsed_seconds
 
@@ -283,6 +290,7 @@ class OpenRouterClient:
                         content = response.choices[0].message.content.strip()
 
                 reasoning_content = None
+                reasoning_details = None
                 if response.choices:
                     msg = response.choices[0].message
                     raw_reasoning = getattr(msg, "reasoning", None)
@@ -293,10 +301,23 @@ class OpenRouterClient:
                         if raw_rc and isinstance(raw_rc, str):
                             reasoning_content = raw_rc.strip()
 
+                    raw_details = getattr(msg, "reasoning_details", None)
+                    if raw_details and isinstance(raw_details, list):
+                        reasoning_details = [
+                            d if isinstance(d, dict) else (d.__dict__ if hasattr(d, "__dict__") else {"type": "unknown"})
+                            for d in raw_details
+                        ]
+
                 usage = _usage_from_response(
                     response=response,
                     elapsed=elapsed,
                 )
+
+                if usage.cached_tokens > 0:
+                    log.info(
+                        "%s: cache hit — %d/%d prompt tokens cached",
+                        model, usage.cached_tokens, usage.prompt_tokens,
+                    )
 
                 return CompletionResult(
                     content=content,
@@ -304,6 +325,7 @@ class OpenRouterClient:
                     model=model,
                     finish_reason=finish_reason,
                     reasoning_content=reasoning_content,
+                    reasoning_details=reasoning_details,
                 )
 
             except Exception as e:
