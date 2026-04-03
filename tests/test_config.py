@@ -18,8 +18,10 @@ from src.config import (
     PROJECT_ROOT,
     RESULTS_DIR,
     SCORING_WEIGHTS,
+    BenchmarkLockError,
     ModelConfig,
     ModelPricing,
+    benchmark_lock,
     ensure_dirs,
     generate_display_label,
     get_config_by_dir_name,
@@ -49,10 +51,10 @@ class TestPaths:
 
 class TestConstants:
     def test_max_turns(self):
-        assert MAX_TURNS == 24
+        assert MAX_TURNS == 48
 
     def test_checkpoint_turns(self):
-        assert CHECKPOINT_TURNS == [6, 12, 18, 24]
+        assert CHECKPOINT_TURNS == [12, 24, 36, 48]
 
     def test_scoring_weights_sum_to_one(self):
         assert abs(sum(SCORING_WEIGHTS.values()) - 1.0) < 1e-9
@@ -304,3 +306,30 @@ class TestYamlLoader:
         finally:
             MODEL_CONFIGS.clear()
             MODEL_CONFIGS.update(orig)
+
+
+class TestBenchmarkLock:
+    def test_lock_creates_and_removes_file(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / ".benchmark.lock"
+        monkeypatch.setattr("src.config.LOCKFILE_PATH", lock_path)
+        with benchmark_lock("test"):
+            assert lock_path.exists()
+            assert "pid=" in lock_path.read_text()
+        assert not lock_path.exists()
+
+    def test_lock_prevents_concurrent_runs(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / ".benchmark.lock"
+        monkeypatch.setattr("src.config.LOCKFILE_PATH", lock_path)
+        with (
+            benchmark_lock("first"),
+            pytest.raises(BenchmarkLockError, match="Another benchmark process"),
+            benchmark_lock("second"),
+        ):
+            pass
+
+    def test_lock_cleans_up_on_exception(self, tmp_path, monkeypatch):
+        lock_path = tmp_path / ".benchmark.lock"
+        monkeypatch.setattr("src.config.LOCKFILE_PATH", lock_path)
+        with pytest.raises(ValueError, match="boom"), benchmark_lock("test"):
+            raise ValueError("boom")
+        assert not lock_path.exists()

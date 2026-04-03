@@ -168,7 +168,7 @@ class TestOpenRouterClient:
         assert OpenRouterClient._resolve_reasoning_effort("off") is None
 
     def test_resolve_reasoning_none_string(self):
-        assert OpenRouterClient._resolve_reasoning_effort("none") is None
+        assert OpenRouterClient._resolve_reasoning_effort("none") == "none"
 
     def test_resolve_reasoning_explicit(self):
         assert OpenRouterClient._resolve_reasoning_effort("high") == "high"

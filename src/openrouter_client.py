@@ -244,10 +244,14 @@ class OpenRouterClient:
 
         The explicit value from the model config is authoritative — no need
         to probe the models endpoint.
+
+        ``"none"`` is sent as-is so that hybrid-thinking models (e.g. Qwen3.5)
+        explicitly disable their internal chain-of-thought. ``None`` and
+        ``"auto"`` mean "do not send the parameter at all".
         """
-        if override is None or override in ("off", "none"):
+        if override is None or override == "auto":
             return None
-        if override == "auto":
+        if override == "off":
             return None
         return override
 

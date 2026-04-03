@@ -11,7 +11,8 @@
 # Fields:
 #   model_id           (required) — API model identifier
 #   temperature        (required) — sampling temperature
-#   reasoning_effort   (required) — reasoning effort level
+#   reasoning_effort   (required) — "off" = don't send param; "none" = explicitly
+#                        disable thinking (hybrid models like Qwen); "low"/"medium"/"high"
 #   active             (optional) — false to exclude from default runs (default: true)
 #   provider           (optional) — OpenRouter provider slug to pin requests to
 
@@ -95,6 +96,30 @@ models:
   # ───────────────────────────────────────────────────────────────
   - model_id: anthropic/claude-opus-4.6
     reasoning_effort: low
+    temperature: 1.0
+
+  # ───────────────────────────────────────────────────────────────
+  # Weak baseline: qwen3.5-9b (small model, expected fast decay)
+  # Added to validate benchmark can detect persona decay.
+  # ───────────────────────────────────────────────────────────────
+  - model_id: qwen/qwen3.5-9b
+    reasoning_effort: none
+    temperature: 1.0
+
+  # ───────────────────────────────────────────────────────────────
+  # Paper-comparable models: cheap models used/similar to original
+  # "Stable Personas" paper for direct result comparison.
+  # ───────────────────────────────────────────────────────────────
+  - model_id: openai/gpt-oss-120b
+    reasoning_effort: "off"
+    temperature: 1.0
+
+  - model_id: meta-llama/llama-3.3-70b-instruct
+    reasoning_effort: "off"
+    temperature: 1.0
+
+  - model_id: deepseek/deepseek-v3.2
+    reasoning_effort: "off"
     temperature: 1.0
 
 # ───────────────────────────────────────────────────────────────

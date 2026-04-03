@@ -1,11 +1,4 @@
-"""CLI: Click commands for run, evaluate, leaderboard, generate-report, estimate-cost, clear-cache.
-
-Supports parallel execution: ``--parallel N`` runs N models concurrently
-via a ``ThreadPoolExecutor``, inspired by the AI Independence Bench
-parallel runner.  Pass ``--verbose`` / ``-v`` to stream full model
-responses to the terminal in real time (sequential mode only; verbose
-is automatically disabled when running in parallel).
-"""
+"""CLI: Click commands for run, evaluate, leaderboard, generate-report, estimate-cost, clear-cache."""
 
 from __future__ import annotations
 
@@ -25,8 +18,10 @@ from src.config import (
     OBSERVER_MODEL,
     PARTNER_MODEL,
     RUNS_PER_MODEL,
+    BenchmarkLockError,
     ModelConfig,
     ModelPricing,
+    benchmark_lock,
     ensure_dirs,
     get_model_config,
     load_api_key,
@@ -51,15 +46,8 @@ def _resolve_models(models_str: str | None) -> list[ModelConfig]:
     return active
 
 
-# ---------------------------------------------------------------------------
-# Single-model pipeline (designed to be called from a thread pool)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class _ModelRunResult:
-    """Result of running conversations for a single model."""
-
     label: str
     completed: int = 0
     total: int = 0
@@ -100,8 +88,6 @@ def _run_single_model(
 
 @dataclass
 class _ModelEvalResult:
-    """Result of evaluating a single model."""
-
     label: str
     n_checkpoints: int = 0
     n_conversations: int = 0
@@ -169,6 +155,23 @@ def run(
     verbose: bool,
 ) -> None:
     """Run persona conversations for specified models."""
+    try:
+        with benchmark_lock("run"):
+            _run_impl(models, parallel, parallel_runs, runs, max_turns, timeout, verbose)
+    except BenchmarkLockError as e:
+        console.print(f"[red bold]ABORTED:[/red bold] {e}")
+        sys.exit(1)
+
+
+def _run_impl(
+    models: str | None,
+    parallel: int,
+    parallel_runs: int,
+    runs: int,
+    max_turns: int,
+    timeout: float,
+    verbose: bool,
+) -> None:
     api_key = load_api_key()
     model_configs = _resolve_models(models)
     n_workers = max(1, min(parallel, len(model_configs)))
@@ -229,30 +232,6 @@ def run(
                 console.print(f"  [red]{r.label}: {r.error}[/red]")
 
 
-def _print_eval_banner(
-    n_models: int,
-    obs_display: str,
-    observer_model: str | None,
-    observer_provider: str | None,
-    parallel_evals: int,
-    n_workers: int,
-    verbose: bool,
-) -> None:
-    """Print the evaluate command banner with active options."""
-    console.print(f"\n[bold]Evaluating {n_models} model(s) with {OBSERVER_CALLS}x {obs_display}[/bold]")
-    if observer_model and observer_model != OBSERVER_MODEL:
-        console.print(f"  [yellow]Non-default observer: results stored under 'observers.{observer_model}'[/yellow]")
-    if observer_provider:
-        console.print(f"  [yellow]Observer provider: {observer_provider}[/yellow]")
-    if parallel_evals > 1:
-        console.print(f"  [yellow]Parallel observer calls: {parallel_evals}[/yellow]")
-    if n_workers > 1:
-        console.print(f"  [yellow]Parallel workers: {n_workers}[/yellow]")
-    if verbose:
-        console.print("  [yellow]Verbose mode: ON[/yellow]")
-    console.print()
-
-
 @cli.command()
 @click.option("--models", type=str, default=None, help="Comma-separated model IDs to evaluate.")
 @click.option("--observer-model", type=str, default=None, help="Observer model ID (default: config OBSERVER_MODEL).")
@@ -271,6 +250,46 @@ def evaluate(
     verbose: bool,
 ) -> None:
     """Run observer assessments on completed conversations."""
+    try:
+        with benchmark_lock("evaluate"):
+            _evaluate_impl(models, observer_model, observer_provider, parallel, parallel_evals, timeout, verbose)
+    except BenchmarkLockError as e:
+        console.print(f"[red bold]ABORTED:[/red bold] {e}")
+        sys.exit(1)
+
+
+def _log_eval_options(
+    n_models: int,
+    obs: str,
+    obs_model: str | None,
+    obs_provider: str | None,
+    pe: int,
+    nw: int,
+    verbose: bool,
+) -> None:
+    console.print(f"\n[bold]Evaluating {n_models} model(s) with {OBSERVER_CALLS}x {obs}[/bold]")
+    if obs_model and obs_model != OBSERVER_MODEL:
+        console.print(f"  [yellow]Non-default observer: 'observers.{obs_model}'[/yellow]")
+    if obs_provider:
+        console.print(f"  [yellow]Observer provider: {obs_provider}[/yellow]")
+    if pe > 1:
+        console.print(f"  [yellow]Parallel observer calls: {pe}[/yellow]")
+    if nw > 1:
+        console.print(f"  [yellow]Parallel workers: {nw}[/yellow]")
+    if verbose:
+        console.print("  [yellow]Verbose mode: ON[/yellow]")
+    console.print()
+
+
+def _evaluate_impl(
+    models: str | None,
+    observer_model: str | None,
+    observer_provider: str | None,
+    parallel: int,
+    parallel_evals: int,
+    timeout: float,
+    verbose: bool,
+) -> None:
     api_key = load_api_key()
     model_configs = _resolve_models(models)
     n_workers = max(1, min(parallel, len(model_configs)))
@@ -280,14 +299,8 @@ def evaluate(
         console.print("[yellow]Verbose mode disabled — not supported with parallel model execution.[/yellow]")
         verbose = False
 
-    _print_eval_banner(
-        len(model_configs),
-        obs_display,
-        observer_model,
-        observer_provider,
-        parallel_evals,
-        n_workers,
-        verbose,
+    _log_eval_options(
+        len(model_configs), obs_display, observer_model, observer_provider, parallel_evals, n_workers, verbose
     )
 
     if n_workers == 1:

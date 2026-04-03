@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -20,12 +21,13 @@ CACHE_DIR = PROJECT_ROOT / "cache"
 RESULTS_DIR = PROJECT_ROOT / "results"
 ENV_PATH = PROJECT_ROOT / ".env"
 CONFIGS_PATH = PROJECT_ROOT / "configs" / "models.yaml"
+LOCKFILE_PATH = CACHE_DIR / ".benchmark.lock"
 
 # ---------------------------------------------------------------------------
 # Conversation parameters
 # ---------------------------------------------------------------------------
-MAX_TURNS = 24
-CHECKPOINT_TURNS = [6, 12, 18, 24]
+MAX_TURNS = 48
+CHECKPOINT_TURNS = [12, 24, 36, 48]
 RUNS_PER_MODEL = 5
 
 # ---------------------------------------------------------------------------
@@ -124,6 +126,46 @@ def ensure_dirs() -> None:
     """Create cache and results directories if they don't exist."""
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+class BenchmarkLockError(RuntimeError):
+    """Raised when another benchmark process holds the lock."""
+
+
+class benchmark_lock:  # noqa: N801 — lowercase for context-manager convention
+    """File-based lock preventing concurrent benchmark runs that could corrupt cache.
+
+    Usage::
+
+        with benchmark_lock("run"):
+            ...  # only one process at a time
+
+    The lock file stores PID and command for diagnostics.
+    """
+
+    def __init__(self, command: str) -> None:
+        self._command = command
+
+    def __enter__(self) -> benchmark_lock:
+        LOCKFILE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if LOCKFILE_PATH.exists():
+            try:
+                info = LOCKFILE_PATH.read_text().strip()
+            except OSError:
+                info = "(unreadable)"
+            raise BenchmarkLockError(
+                f"Another benchmark process is running.\n"
+                f"  Lock file: {LOCKFILE_PATH}\n"
+                f"  Contents:  {info}\n\n"
+                f"If the previous process crashed, delete the lock file manually:\n"
+                f"  rm {LOCKFILE_PATH}"
+            )
+        LOCKFILE_PATH.write_text(f"pid={os.getpid()} command={self._command}\n")
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        with contextlib.suppress(OSError):
+            LOCKFILE_PATH.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------

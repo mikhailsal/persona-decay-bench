@@ -322,8 +322,8 @@ class TestRunConversation:
     @patch("src.runner.load_conversation")
     @patch("src.runner.conversation_exists", return_value=True)
     def test_skips_cached_conversation(self, mock_exists, mock_load):
-        # expected_messages = 2 + 2 * max_turns; default max_turns=24 => 50
-        mock_load.return_value = [{"turn": i} for i in range(50)]
+        # expected_messages = 2 + 2 * max_turns; default max_turns=48 => 98
+        mock_load.return_value = [{"turn": i} for i in range(98)]
 
         client = MagicMock()
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")

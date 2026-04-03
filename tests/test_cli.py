@@ -209,6 +209,18 @@ class TestEvaluateCommand:
         assert result.exit_code == 0
         assert "failed" in result.output.lower()
 
+    @patch("src.evaluator.evaluate_model")
+    @patch("src.openrouter_client.OpenRouterClient")
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_evaluate_parallel_verbose_disabled(self, mock_key, mock_client_cls, mock_eval, runner):
+        mock_eval.return_value = [{"checkpoints": {6: {}}}]
+        result = runner.invoke(
+            cli,
+            ["evaluate", "--models", "test/a,test/b", "--parallel", "2", "--verbose"],
+        )
+        assert result.exit_code == 0
+        assert "Verbose mode disabled" in result.output
+
 
 class TestRunSingleModel:
     @patch("src.runner.run_all_conversations")
@@ -298,3 +310,22 @@ class TestEvalSingleModel:
         cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
         result = _eval_single_model("sk-test", cfg, 60.0, False)
         assert result.error is not None
+
+
+class TestBenchmarkLockIntegration:
+    def test_run_blocked_by_lock(self, runner, tmp_path, monkeypatch):
+        lock_path = tmp_path / ".benchmark.lock"
+        lock_path.write_text("pid=99999 command=test\n")
+        monkeypatch.setattr("src.config.LOCKFILE_PATH", lock_path)
+        result = runner.invoke(cli, ["run", "--models", "test/model", "--runs", "1"])
+        assert result.exit_code == 1
+        assert "ABORTED" in result.output
+
+    @patch("src.cli.load_api_key", return_value="sk-test")
+    def test_evaluate_blocked_by_lock(self, mock_key, runner, tmp_path, monkeypatch):
+        lock_path = tmp_path / ".benchmark.lock"
+        lock_path.write_text("pid=99999 command=test\n")
+        monkeypatch.setattr("src.config.LOCKFILE_PATH", lock_path)
+        result = runner.invoke(cli, ["evaluate", "--models", "test/model"])
+        assert result.exit_code == 1
+        assert "ABORTED" in result.output
