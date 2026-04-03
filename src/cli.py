@@ -115,6 +115,7 @@ def _eval_single_model(
     verbose: bool,
     observer_model: str | None = None,
     observer_provider: str | None = None,
+    parallel_evals: int = 1,
 ) -> _ModelEvalResult:
     """Run observer assessments for one model.  Thread-safe: creates its own client."""
     from src.evaluator import evaluate_model
@@ -130,6 +131,7 @@ def _eval_single_model(
             observer_model=obs_model,
             observer_provider=observer_provider,
             verbose=verbose,
+            parallel=parallel_evals,
         )
         result.n_conversations = len(eval_results)
         result.n_checkpoints = sum(len(r.get("checkpoints", {})) for r in eval_results)
@@ -227,11 +229,36 @@ def run(
                 console.print(f"  [red]{r.label}: {r.error}[/red]")
 
 
+def _print_eval_banner(
+    n_models: int,
+    obs_display: str,
+    observer_model: str | None,
+    observer_provider: str | None,
+    parallel_evals: int,
+    n_workers: int,
+    verbose: bool,
+) -> None:
+    """Print the evaluate command banner with active options."""
+    console.print(f"\n[bold]Evaluating {n_models} model(s) with {OBSERVER_CALLS}x {obs_display}[/bold]")
+    if observer_model and observer_model != OBSERVER_MODEL:
+        console.print(f"  [yellow]Non-default observer: results stored under 'observers.{observer_model}'[/yellow]")
+    if observer_provider:
+        console.print(f"  [yellow]Observer provider: {observer_provider}[/yellow]")
+    if parallel_evals > 1:
+        console.print(f"  [yellow]Parallel observer calls: {parallel_evals}[/yellow]")
+    if n_workers > 1:
+        console.print(f"  [yellow]Parallel workers: {n_workers}[/yellow]")
+    if verbose:
+        console.print("  [yellow]Verbose mode: ON[/yellow]")
+    console.print()
+
+
 @cli.command()
 @click.option("--models", type=str, default=None, help="Comma-separated model IDs to evaluate.")
 @click.option("--observer-model", type=str, default=None, help="Observer model ID (default: config OBSERVER_MODEL).")
 @click.option("--observer-provider", type=str, default=None, help="Pin observer to a specific provider slug.")
 @click.option("--parallel", "-p", type=int, default=1, help="Number of models to evaluate in parallel.")
+@click.option("--parallel-evals", "-pe", type=int, default=10, help="Concurrent observer calls per model (default 10).")
 @click.option("--timeout", type=float, default=API_CALL_TIMEOUT, help="Per-API-call timeout in seconds.")
 @click.option("--verbose", "-v", is_flag=True, default=False, help="Show full observer responses in real time.")
 def evaluate(
@@ -239,6 +266,7 @@ def evaluate(
     observer_model: str | None,
     observer_provider: str | None,
     parallel: int,
+    parallel_evals: int,
     timeout: float,
     verbose: bool,
 ) -> None:
@@ -249,24 +277,31 @@ def evaluate(
     obs_display = observer_model or OBSERVER_MODEL
 
     if verbose and n_workers > 1:
-        console.print("[yellow]Verbose mode disabled — not supported with parallel execution.[/yellow]")
+        console.print("[yellow]Verbose mode disabled — not supported with parallel model execution.[/yellow]")
         verbose = False
 
-    console.print(f"\n[bold]Evaluating {len(model_configs)} model(s) with {OBSERVER_CALLS}x {obs_display}[/bold]")
-    if observer_model and observer_model != OBSERVER_MODEL:
-        console.print(f"  [yellow]Non-default observer: results stored under 'observers.{observer_model}'[/yellow]")
-    if observer_provider:
-        console.print(f"  [yellow]Observer provider: {observer_provider}[/yellow]")
-    if n_workers > 1:
-        console.print(f"  [yellow]Parallel workers: {n_workers}[/yellow]")
-    if verbose:
-        console.print("  [yellow]Verbose mode: ON[/yellow]")
-    console.print()
+    _print_eval_banner(
+        len(model_configs),
+        obs_display,
+        observer_model,
+        observer_provider,
+        parallel_evals,
+        n_workers,
+        verbose,
+    )
 
     if n_workers == 1:
         for cfg in model_configs:
             console.print(f"[bold cyan]Model: {cfg.label}[/bold cyan]")
-            result = _eval_single_model(api_key, cfg, timeout, verbose, observer_model, observer_provider)
+            result = _eval_single_model(
+                api_key,
+                cfg,
+                timeout,
+                verbose,
+                observer_model,
+                observer_provider,
+                parallel_evals,
+            )
             if result.error:
                 console.print(f"  [red]Error: {result.error}[/red]\n")
             else:
@@ -277,7 +312,14 @@ def evaluate(
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
             futures = {
                 pool.submit(
-                    _eval_single_model, api_key, cfg, timeout, verbose, observer_model, observer_provider
+                    _eval_single_model,
+                    api_key,
+                    cfg,
+                    timeout,
+                    verbose,
+                    observer_model,
+                    observer_provider,
+                    parallel_evals,
                 ): cfg.label
                 for cfg in model_configs
             }

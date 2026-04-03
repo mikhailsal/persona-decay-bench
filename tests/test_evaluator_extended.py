@@ -132,6 +132,32 @@ class TestEvaluateModel:
         results = evaluate_model(client, cfg, runs=[1, 2])
         assert len(results) == 4  # 2 runs x 2 conversations
 
+    @patch("src.evaluator.evaluate_checkpoint")
+    @patch("src.evaluator.list_checkpoints", return_value=[6, 12])
+    @patch("src.evaluator.list_conversations", return_value=["conv001"])
+    def test_parallel_evaluation(self, mock_convs, mock_cps, mock_eval_cp):
+        mock_eval_cp.return_value = {"turn": 6, "observer_mean": 20.0}
+        client = MagicMock()
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+
+        results = evaluate_model(client, cfg, runs=[1], parallel=4)
+        assert len(results) == 1
+        assert 6 in results[0]["checkpoints"]
+        assert 12 in results[0]["checkpoints"]
+        assert mock_eval_cp.call_count == 2
+
+    @patch("src.evaluator.evaluate_checkpoint")
+    @patch("src.evaluator.list_checkpoints", return_value=[6, 12])
+    @patch("src.evaluator.list_conversations", return_value=["conv1", "conv2"])
+    def test_parallel_multiple_convs(self, mock_convs, mock_cps, mock_eval_cp):
+        mock_eval_cp.return_value = {"turn": 6, "observer_mean": 18.0}
+        client = MagicMock()
+        cfg = ModelConfig(model_id="test/model", temperature=0.7, reasoning_effort="none")
+
+        results = evaluate_model(client, cfg, runs=[1, 2], parallel=8)
+        assert len(results) == 4  # 2 runs x 2 conversations
+        assert mock_eval_cp.call_count == 8  # 4 convs x 2 checkpoints
+
 
 class TestEvaluateCheckpointCachedObserver:
     @patch("src.evaluator.load_conversation")

@@ -1,9 +1,4 @@
-"""Evaluator: observer assessment + self-report score extraction.
-
-Observer assessment: 3 independent calls to gemini-3-flash-preview.
-Self-report extraction: parses JSON responses from target models.
-ICC computation: two-way random, single measures, absolute agreement.
-"""
+"""Evaluator: observer assessment, self-report extraction, ICC computation."""
 
 from __future__ import annotations
 
@@ -403,8 +398,12 @@ def evaluate_model(
     observer_model: str = OBSERVER_MODEL,
     observer_provider: str | None = None,
     verbose: bool = False,
+    parallel: int = 1,
 ) -> list[dict[str, Any]]:
     """Run observer evaluation for all conversations and checkpoints of a model.
+
+    Args:
+        parallel: max concurrent observer API calls (1 = sequential).
 
     Returns list of evaluation results per conversation.
     """
@@ -415,20 +414,73 @@ def evaluate_model(
     if not available_runs:
         return []
 
-    all_results: list[dict[str, Any]] = []
+    tasks = _collect_eval_tasks(config_dir, available_runs)
+    if not tasks:
+        return []
 
+    return _execute_eval_tasks(
+        tasks,
+        client=client,
+        model_config=model_config,
+        observer_model=observer_model,
+        observer_provider=observer_provider,
+        verbose=verbose,
+        parallel=parallel,
+    )
+
+
+def _collect_eval_tasks(
+    config_dir: str,
+    available_runs: list[int],
+) -> list[tuple[int, str, int]]:
+    """Build a flat list of (run_number, conversation_id, turn) tasks."""
+    tasks: list[tuple[int, str, int]] = []
     for run_num in available_runs:
-        conversations = list_conversations(config_dir, run_num)
-        for conv_id in conversations:
-            checkpoints = list_checkpoints(config_dir, run_num, conv_id)
-            conv_results: dict[str, Any] = {
-                "conversation_id": conv_id,
-                "run": run_num,
-                "checkpoints": {},
-            }
+        for conv_id in list_conversations(config_dir, run_num):
+            for turn in list_checkpoints(config_dir, run_num, conv_id):
+                tasks.append((run_num, conv_id, turn))
+    return tasks
 
-            for turn in checkpoints:
-                result = evaluate_checkpoint(
+
+def _execute_eval_tasks(
+    tasks: list[tuple[int, str, int]],
+    *,
+    client: OpenRouterClient,
+    model_config: ModelConfig,
+    observer_model: str,
+    observer_provider: str | None,
+    verbose: bool,
+    parallel: int,
+) -> list[dict[str, Any]]:
+    """Execute checkpoint evaluations, optionally in parallel."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    results_by_key: dict[tuple[int, str], dict[str, Any]] = {}
+    for run_num, conv_id, _turn in tasks:
+        key = (run_num, conv_id)
+        if key not in results_by_key:
+            results_by_key[key] = {"conversation_id": conv_id, "run": run_num, "checkpoints": {}}
+
+    workers = max(1, min(parallel, len(tasks)))
+
+    if workers <= 1:
+        for run_num, conv_id, turn in tasks:
+            result = evaluate_checkpoint(
+                client,
+                model_config,
+                run_num,
+                conv_id,
+                turn,
+                observer_model=observer_model,
+                observer_provider=observer_provider,
+                verbose=verbose,
+            )
+            results_by_key[(run_num, conv_id)]["checkpoints"][turn] = result
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            future_map = {
+                pool.submit(
+                    evaluate_checkpoint,
                     client,
                     model_config,
                     run_num,
@@ -437,9 +489,11 @@ def evaluate_model(
                     observer_model=observer_model,
                     observer_provider=observer_provider,
                     verbose=verbose,
-                )
-                conv_results["checkpoints"][turn] = result
+                ): (run_num, conv_id, turn)
+                for run_num, conv_id, turn in tasks
+            }
+            for future in as_completed(future_map):
+                run_num, conv_id, turn = future_map[future]
+                results_by_key[(run_num, conv_id)]["checkpoints"][turn] = future.result()
 
-            all_results.append(conv_results)
-
-    return all_results
+    return list(results_by_key.values())
