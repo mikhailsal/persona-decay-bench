@@ -107,9 +107,9 @@ class TestBuildObserverPrompt:
         for item in CAARS_ITEMS:
             assert item.id in prompt
 
-    def test_mentions_observable_behavior(self):
+    def test_mentions_evidence_based_rating(self):
         prompt = build_observer_prompt("test")
-        assert "observable" in prompt.lower()
+        assert "all evidence" in prompt.lower()
 
     def test_mentions_json(self):
         prompt = build_observer_prompt("test")

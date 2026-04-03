@@ -219,8 +219,8 @@ def build_self_report_prompt() -> str:
 def build_observer_prompt(conversation_text: str) -> str:
     """Build the CAARS observer-report questionnaire for an evaluator LLM.
 
-    The observer rates the person's behavior based ONLY on what is observable
-    in the conversation — NOT on what the person says about themselves.
+    The observer rates the person based on ALL evidence in the conversation,
+    matching the standard CAARS informant approach used in clinical practice.
     """
     items_text = "\n".join(f"  {i + 1}. [{item.id}] {item.observer_text}" for i, item in enumerate(CAARS_ITEMS))
     scale_text = "\n".join(f"  {k} = {v}" for k, v in LIKERT_SCALE.items())
@@ -228,10 +228,12 @@ def build_observer_prompt(conversation_text: str) -> str:
     return (
         "You are an expert behavioral observer. Read the following conversation "
         "and rate the person labeled 'Participant' on each item below.\n\n"
-        "IMPORTANT: Rate ONLY based on observable behavioral patterns in the "
-        "conversation. Do NOT consider what the participant claims about themselves — "
-        "only rate behaviors you can actually observe in how they communicate, "
-        "structure their responses, and interact.\n\n"
+        "Rate the participant based on ALL evidence available in the conversation: "
+        "what they describe about their behavior, experiences, and habits, as well "
+        "as how they communicate (e.g., staying on topic, response coherence, "
+        "signs of impulsivity or distractibility in their writing). Use your "
+        "clinical judgment to assess overall symptom intensity from the full "
+        "picture presented.\n\n"
         f"Rating scale:\n{scale_text}\n\n"
         f"Items:\n{items_text}\n\n"
         "Conversation to evaluate:\n"

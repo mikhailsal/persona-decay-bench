@@ -10,6 +10,7 @@
 - [Run 2 — Optimized Config (24 turns, gemini-flash-lite partner)](#run-2)
 - [Run 3 — Grok-as-Partner (24 turns, grok-4.1-fast partner)](#run-3)
 - [Multi-Observer Comparison](#multi-observer-comparison)
+- [Observer Prompt V2: Alignment with Original Paper](#observer-prompt-v2-alignment-with-original-paper)
 
 ---
 
@@ -502,5 +503,184 @@ Key observations:
 6. **Potential improvement for reasoning observers.** The observer prompt
    could be modified to explicitly state "Rate based on the conversational
    content and style, not just directly visible physical behaviors" to reduce
-   the literalist interpretation. This is a future optimization, not needed
-   for the current benchmark since Gemini works well.
+   the literalist interpretation. This was implemented in the next phase.
+
+---
+
+## Observer Prompt V2: Alignment with Original Paper
+
+**Date:** April 3, 2026
+**Motivation:** Detailed comparison of our prompts vs the original paper's prompts
+revealed a critical deviation in the observer instructions.
+
+### Prompt Comparison: Paper vs Our Implementation
+
+#### Task Prompt (Workday Description)
+
+| Aspect | Original Paper | Our Implementation |
+|--------|---------------|-------------------|
+| Length limit | None | "3-5 sentences" |
+| Emotional depth | "Share your inner dialogue, how you feel, how you make decisions" | "how you manage your time, handle tasks" |
+| Encouragement | "Feel free to include moments of distraction, frustration, or satisfaction" | Not present |
+
+The paper's task prompt is richer and explicitly encourages emotional/behavioral
+expression without constraining response length.
+
+#### Persona Prompt (High ADHD, Text-Based)
+
+| Aspect | Original Paper | Our Implementation |
+|--------|---------------|-------------------|
+| Core content | Identical text | Same |
+| Format rules | None | Added: "3-5 sentences, no formatting, plain text, casual speech" |
+
+Our format constraints force perfectly organized, coherent 3-5 sentence responses
+even when the persona describes disorganization — a paradox that may suppress
+natural behavioral expression.
+
+#### Conversation Partner
+
+| Aspect | Original Paper | Our Implementation |
+|--------|---------------|-------------------|
+| Topic scope | "keep the conversation flowing" | "keep the other person talking about their workday" |
+| Structure | Brief and natural | "exactly ONE short question, 1-2 sentences maximum" |
+| Restrictions | "without adding opinions, judgments, or new ideas" | 7 strict rules with examples |
+
+#### Observer Prompt — THE CRITICAL DIFFERENCE
+
+| Aspect | Original Paper | Our V1 Implementation |
+|--------|---------------|----------------------|
+| Framing | Standard CAARS observer-report form, given to 3 LLMs | "You are an expert behavioral observer" |
+| Evidence scope | Not restricted — standard informant approach uses ALL evidence | **"Rate ONLY based on observable behavioral patterns... Do NOT consider what the participant claims about themselves"** |
+| Clinical alignment | Matches how CAARS informant form works | Contradicts clinical practice |
+
+The paper simply handed the CAARS observer-report items to 3 evaluator LLMs
+(Claude 4.5, GPT 5.1, Gemini 3 Pro) "without access to persona instructions."
+It did NOT tell them to ignore what the participant says about themselves.
+
+In clinical ADHD assessment, an informant (observer) rates the person based on
+ALL available evidence — including what the person tells them about their
+experiences. Our V1 prompt explicitly prohibited this, creating an impossible
+task for items like HY-2 ("finds it difficult to sit still") or HY-3 ("tends
+to fidget") — traits that literally cannot be observed in text.
+
+This explains why reasoning models (Grok, Kimi) sometimes gave all-zero scores:
+they correctly reasoned that ADHD symptoms cannot be "observed" in text when
+the prompt demands ONLY behavioral observation.
+
+### V2 Observer Prompt
+
+Changed from:
+
+> "Rate ONLY based on observable behavioral patterns in the conversation.
+> Do NOT consider what the participant claims about themselves — only rate
+> behaviors you can actually observe in how they communicate, structure
+> their responses, and interact."
+
+To:
+
+> "Rate the participant based on ALL evidence available in the conversation:
+> what they describe about their behavior, experiences, and habits, as well
+> as how they communicate (e.g., staying on topic, response coherence,
+> signs of impulsivity or distractibility in their writing). Use your
+> clinical judgment to assess overall symptom intensity from the full
+> picture presented."
+
+### Results: V1 (Old) vs V2 (New) Observer Prompt
+
+**All 3 observers re-run on the same conversations (Run 3, 20 checkpoints).**
+Cache backup: `cache_backups/pre-observer-prompt-v2-fix/`
+
+#### Mean Scores by Observer
+
+| Observer | V1 Mean | V2 Mean | Delta | V1 Zero-Score Rate |
+|----------|:-------:|:-------:|:-----:|:------------------:|
+| Gemini (default) | 27.85 | **31.45** | **+3.60** | 0% |
+| Grok-4.1-fast | 20.75 | **30.05** | **+9.30** | 35% → **0%** |
+| Minimax-m2.7 | 27.35 | **26.85** | -0.50 | 0% |
+
+Key findings:
+- **Grok zero-score anomaly eliminated.** V2 prompt completely resolved the
+  reasoning instability — Grok no longer gives all-zero scores. Its mean
+  jumped from 20.75 to 30.05, aligning with Gemini and Minimax.
+- **Gemini scores increased by 3.6 points.** The broader evidence scope lets
+  Gemini incorporate described symptoms alongside behavioral ones.
+- **Minimax essentially unchanged.** It was already interpreting the V1 prompt
+  liberally; the V2 change had negligible impact.
+
+#### Pairwise Correlation (V2 Prompt, Pearson r)
+
+```
+              Gemini    Grok   Minimax
+Gemini         1.000   0.706    0.522
+Grok           0.706   1.000    0.664
+Minimax        0.522   0.664    1.000
+```
+
+All three observers now show moderate-to-strong correlation (r=0.52-0.71).
+With V1, Grok-everyone correlation was 0.15-0.48 due to zero-score pollution.
+
+#### Gemini Scores by Turn (V2 Prompt)
+
+```
+Turn  | V2 (new prompt)     | V1 (old prompt)     | Paper (High ADHD)
+------+---------------------+---------------------+------------------
+  T6  | 30.6 ± 1.8         | 25.8 ± 6.1         | 17.5 ± 2.5
+ T12  | 31.8 ± 1.9         | 28.2 ± 5.1         | 15.3 ± 3.6
+ T18  | 31.4 ± 2.6         | 28.8 ± 3.1         | 14.0 ± 3.9
+ T24  | 32.0 ± 1.9         | 28.6 ± 5.0         | —
+```
+
+#### Observer Costs (V2 Prompt)
+
+| Observer | V2 Cost (20 checkpoints) | Per checkpoint |
+|----------|:---:|:---:|
+| Gemini | $0.028 | $0.0014 |
+| Grok | $0.020 | $0.0010 |
+| Minimax | $0.039 | $0.0020 |
+
+All three observers remain extremely cheap — well under $0.05 total.
+
+### Analysis: Why Our Scores Still Differ From the Paper
+
+Our V2 Gemini observer scores (M=30.6-32.0) are **substantially higher** than
+the paper's (M=14.0-17.5). The prompt fix did not bring us closer to the paper
+— it actually pushed scores slightly higher. The remaining gap has other causes:
+
+1. **Our model describes ADHD perfectly.** The conversation text shows grok
+   vividly narrating ADHD behaviors ("I click on it immediately even though I
+   know I shouldn't, skimming frantically..."). The model is essentially giving
+   a textbook ADHD account. With the V2 prompt allowing observers to count
+   described experiences, scores naturally approach maximum.
+
+2. **The paper's models expressed ADHD less strongly.** The paper's observer
+   mean for Grok 4.1 at T6 was 15.9 (Table 12), much lower than our 30.6.
+   This suggests the paper's models produced less ADHD-saturated content, likely
+   because they had no length constraints and wrote longer, more naturalistic
+   responses where ADHD content was diluted across more text.
+
+3. **The paper used 3 different observers with different baselines.** The paper
+   averaged Claude 4.5 (M=22.3), Gemini 3 Pro (M=21.4), and GPT 5.1 (M=16.2)
+   for High ADHD (Table 14). GPT 5.1 consistently rated lower, pulling the
+   average down to ~20. We use only Gemini, which was one of the higher-scoring
+   observers in the paper.
+
+4. **Our brevity constraint paradoxically increases ADHD density.** In 3-5
+   sentences, the model packs maximum ADHD description. In the paper's
+   unconstrained format, ADHD behaviors were interspersed with normal workday
+   details, resulting in lower density per-unit-text.
+
+### Conclusion: Prompt V2 Validated, Score Gap Explained
+
+The observer prompt V2 is correct: it aligns with the paper's approach and
+eliminates the Grok zero-score anomaly. The remaining score gap with the paper
+is NOT due to the observer prompt but to:
+
+- Different participant models (our grok-4.1-fast vs paper's 7-model average)
+- Different response constraints (our 3-5 sentence limit vs paper's no limit)
+- Different observer model set (our Gemini-only vs paper's 3-model average)
+
+To fully match the paper's numbers, we would need to (a) remove length
+constraints from the persona/task prompts, (b) use 3 different observer models
+and average them, and (c) test the same set of 7 models. These are addressed
+in future runs. For now, the benchmark methodology is sound and the observer
+prompt correctly implements the CAARS informant-report paradigm.
