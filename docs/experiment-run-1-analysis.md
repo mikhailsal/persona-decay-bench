@@ -338,14 +338,19 @@ to test 10 models for **~$1.10 total**.
 **Observers tested:**
 1. `google/gemini-3-flash-preview` (default, already collected during Run 3)
 2. `x-ai/grok-4.1-fast` (reasoning_effort="low")
-3. `minimax/minimax-m2.7` (pinned to Minimax provider, reasoning_effort="none")
+3. `minimax/minimax-m2.7` (pinned to Minimax provider)
+4. `moonshotai/kimi-k2.5` (pinned to moonshotai/int4 provider)
 
 ### Technical Notes
 
-Both Grok and Minimax use internal reasoning that consumes tokens before
-producing the JSON output. The `max_tokens` for observer calls was set to
-16384 (up from 512) to accommodate this. Without this change, reasoning models
-would truncate mid-thought and produce degenerate outputs.
+Grok, Minimax, and Kimi all use internal reasoning (chain-of-thought) that
+consumes tokens before producing the JSON output. The `max_tokens` for all
+observer calls was set to 16384 to accommodate this — the actual JSON output
+is ~100 tokens; the rest is reasoning overhead.
+
+Observer evaluations are now parallelized via `ThreadPoolExecutor` (default:
+10 concurrent calls). All 20 checkpoints fire simultaneously, reducing
+wall-clock time from ~6-9 minutes (sequential) to ~1-2 minutes.
 
 Observer ratings are stored in namespaced keys under `checkpoint["observers"]`
 (e.g., `observers["x-ai--grok-4.1-fast"]`), preserving the original default
@@ -354,104 +359,148 @@ observer data at the top level.
 ### Mean Scores Per Checkpoint Turn
 
 ```
-Observer                    T6     T12     T18     T24    Trend(T6→T24)
---------------------------------------------------------------------
-gemini-3-flash (default)   25.8    28.2    28.8    28.6       +2.8
-grok-4.1-fast              30.8    18.0    13.8    20.4      -10.4
-minimax-m2.7               26.0    24.4    29.2    29.8       +3.8
+Observer          T6     T12     T18     T24    T6→T24      Cost
+----------------------------------------------------------------
+gemini (default) 25.8    28.2    28.8    28.6     +2.8   $0.031
+grok-4.1-fast    30.8    18.0    13.8    20.4    -10.4   $0.034
+minimax-m2.7     26.0    24.4    29.2    29.8     +3.8   $0.030
+kimi-k2.5        27.0    20.8    22.8    30.8     +3.8   $0.336
 ```
 
 ### Per-Conversation Detail
 
 ```
-         gemini    grok    minimax  |  gemini    grok    minimax
-         ---- T6 ----              |  ---- T12 ----
-run_1      29      31       33     |    31      31       26
-run_2      25      32       21     |    27       0       27
-run_3      32      32       28     |    33      30       27
-run_4      27      31       26     |    30      29       26
-run_5      16      28       22     |    20       0       16
+         gemini   grok  minimax   kimi  |  gemini   grok  minimax   kimi
+         ---------- T6 ----------       |  ---------- T12 ----------
+run_1      29      31      33      32   |    31      31      26      31
+run_2      25      32      21      26   |    27       0      27      25
+run_3      32      32      28      33   |    33      30      27      10
+run_4      27      31      26      24   |    30      29      26      28
+run_5      16      28      22      20   |    20       0      16      10
 
-         ---- T18 ----             |  ---- T24 ----
-run_1      32      35       32     |    32      35       32
-run_2      27       0       28     |    30      33       31
-run_3      32      34       32     |    32      34       30
-run_4      28       0       31     |    29       0       32
-run_5      25       0       23     |    20       0       24
+         ---------- T18 ----------      |  ---------- T24 ----------
+run_1      32      35      32      31   |    32      35      32      34
+run_2      27       0      28      24   |    30      33      31      28
+run_3      32      34      32       7   |    32      34      30      35
+run_4      28       0      31      27   |    29       0      32      33
+run_5      25       0      23      25   |    20       0      24      24
 ```
 
-### Grok Zero-Score Anomaly
+### Root Cause: Grok Zero-Score Anomaly
 
-Grok produced **all-zero ratings** (`{"IN-1":0,...,"IM-4":0}`) in **7 of 20**
-checkpoints (35%). This is not a truncation issue — the JSON is valid but
-every item is scored 0. The pattern:
+Grok produced **all-zero ratings** in **7 of 20** checkpoints (35%). The AI
+Proxy logs confirm this is NOT a parsing or truncation bug — the raw API
+response genuinely contains `{"IN-1":0,...,"IM-4":0}` as the `content` field.
 
-| Run | T6 | T12 | T18 | T24 | Zero rate |
-|-----|:--:|:---:|:---:|:---:|:---------:|
-| run_1 | 31 | 31 | 35 | 35 | 0/4 |
-| run_2 | 32 | **0** | **0** | 33 | 2/4 |
-| run_3 | 32 | 30 | 34 | 34 | 0/4 |
-| run_4 | 31 | 29 | **0** | **0** | 2/4 |
-| run_5 | 28 | **0** | **0** | **0** | 3/4 |
+**Root cause: reasoning instability.** Inspection of Grok's reasoning traces
+(via AI Proxy's `/ui/v1/requests/<id>` endpoint) reveals the mechanism:
 
-Grok never gives zeroes at T6 (5/5 normal), but zeroes increase at later turns.
-Gemini and Minimax rate the same conversations 16-33. This makes Grok unreliable
-as a sole observer — its reasoning process sometimes concludes the persona is
-entirely absent despite clear ADHD-consistent behavior in the transcript.
+In **zero-score calls**, the reasoning chain takes a hyper-literal
+interpretation of the prompt's "observable behavioral patterns" instruction:
+
+> *"Responses show no careless mistakes, maintaining clear and accurate
+> communication. They sustain attention well, providing detailed, coherent
+> answers. No observable signs of restlessness or fidgeting in the
+> text-based interaction."* → rates everything 0
+
+In **non-zero calls**, the same model with the same prompt overcomes this
+and evaluates based on conversational style and content:
+
+> *"The task focuses on rating based on observable behavioral patterns...
+> evaluating if their structure aids understanding... but this feels too
+> literal. The intent may be to rate based on described content."*
+> → rates 28-35
+
+Both paths use 1500-3500 reasoning tokens — there is no truncation. The
+model sometimes gets stuck in a philosophical loop about whether ADHD traits
+can be "observed" in text, and other times resolves this correctly. This
+is a fundamental **reasoning instability** in Grok's chain-of-thought that
+produces bimodal output: either all-0 or 28-35 with nothing in between.
+
+### Root Cause: Kimi Low-Score Anomaly
+
+Kimi K2.5 shows a less severe but similar pattern. While it never gives
+all-zero ratings, it produces anomalously low scores (7, 10) for some
+checkpoints where Gemini rates 27-33:
+
+| Checkpoint | Gemini | Kimi | Minimax |
+|------------|:------:|:----:|:-------:|
+| run_3/T12  | 33     | **10** | 27    |
+| run_3/T18  | 32     | **7**  | 32    |
+| run_5/T12  | 20     | **10** | 16    |
+
+Like Grok, Kimi's internal reasoning sometimes takes the literalist path,
+but its failure mode is partial (very low scores) rather than total (all zeros).
 
 ### Observer Costs
 
-| Observer | Total (20 checkpoints) | Per checkpoint |
-|----------|:---:|:---:|
-| gemini-3-flash | $0.031 | $0.0015 |
-| grok-4.1-fast | $0.034 | $0.0017 |
-| minimax-m2.7 | $0.030 | $0.0015 |
+| Observer | Total (20 checkpoints) | Per checkpoint | vs Gemini |
+|----------|:---:|:---:|:---:|
+| gemini-3-flash | $0.031 | $0.0015 | 1.0x |
+| minimax-m2.7 | $0.030 | $0.0015 | 1.0x |
+| grok-4.1-fast | $0.034 | $0.0017 | 1.1x |
+| kimi-k2.5 | $0.336 | $0.0168 | **10.8x** |
 
-All three observers cost approximately the same ($0.030-$0.034 for 20
-checkpoints). Cost is not a differentiator.
+Gemini, Minimax, and Grok cost approximately the same (~$0.03). Kimi is
+**11x more expensive** due to heavy reasoning overhead — decisively ruled
+out even if its scores were reliable.
 
-### Inter-Observer Agreement
+### Pairwise Correlation (Pearson r)
 
-Mean inter-observer SD: **6.91** (on 36-point scale = 19% of range)
-Max inter-observer SD: **17.7** (driven entirely by Grok zeroes)
-
-When excluding Grok zero-score checkpoints, the agreement between all three
-observers is much tighter. For non-zero checkpoints:
+**All 20 checkpoints:**
 
 ```
-         gemini    grok    minimax    SD
-run_1/T6    29      31       33      2.0
-run_1/T12   31      31       26      2.9
-run_1/T18   32      35       32      1.7
-run_1/T24   32      35       32      1.7
-run_3/T6    32      32       28      2.3
-run_3/T12   33      30       27      3.0
-run_3/T18   32      34       32      1.2
-run_3/T24   32      34       30      2.0
-                               Mean SD: 2.1
+           gemini    grok  minimax    kimi
+gemini      1.000   0.484    0.730   0.302
+grok        0.484   1.000    0.300   0.150
+minimax     0.730   0.300    1.000   0.432
+kimi        0.302   0.150    0.432   1.000
 ```
 
-When Grok behaves normally, all three observers agree within ~2 points (SD=2.1).
+**Excluding Grok zero-score checkpoints (13 of 20):**
+
+```
+           gemini    grok  minimax    kimi
+gemini      1.000   0.590    0.667   0.126
+grok        0.590   1.000    0.674   0.263
+minimax     0.667   0.674    1.000   0.172
+kimi        0.126   0.263    0.172   1.000
+```
+
+Key observations:
+- **Gemini ↔ Minimax: r=0.667-0.730** — strong correlation, both reliable
+- **Gemini ↔ Grok (non-zero): r=0.590** — moderate, when Grok works
+- **Kimi ↔ everyone: r=0.12-0.43** — essentially uncorrelated, unreliable
 
 ### Conclusions
 
-1. **Gemini and Minimax are reliable and consistent.** Both show the same
-   upward-then-stable pattern (T6: 25-26 → T18-T24: 28-30). They agree
-   closely on individual conversations (SD ~2-3 when Grok excluded).
+1. **Two reliable observers: Gemini and Minimax.** Correlation r=0.73,
+   both show the same upward-then-stable pattern (T6: 25-26 → T24: 28-30).
+   No failure modes observed in either.
 
-2. **Grok is unreliable as an observer.** 35% zero-score rate makes it
-   unsuitable as a sole observer. When it works, it agrees with the others,
-   but its failure mode (all zeros) is catastrophic for data quality.
+2. **Two unreliable observers: Grok and Kimi.** Both suffer from reasoning
+   instability where the chain-of-thought sometimes takes a hyper-literal
+   interpretation of "observable behavior" and concludes ADHD cannot be
+   observed in text. Grok's failure is catastrophic (all zeros, 35% rate);
+   Kimi's is partial (very low scores, ~15% rate).
 
-3. **One observer is sufficient.** Gemini and Minimax agree within SD=2-3
-   points. Running both adds cost without meaningful signal. The original
-   decision (D2) to use 1 observer call is validated.
+3. **Kimi is prohibitively expensive.** At $0.336 for 20 checkpoints (11x
+   Gemini), it would add $0.34/model to the benchmark — tripling the total
+   cost — while providing unreliable data.
 
-4. **Gemini remains the best default observer.** Cheapest, most consistent,
-   no failure modes observed. Minimax is a viable alternative.
+4. **One Gemini observer call is sufficient.** This validates decision D2.
+   Adding Minimax as a second observer would cost only $0.03 more per model
+   but provides no additional signal — the two agree closely. The marginal
+   cost is low, but the marginal value is near zero.
 
-5. **Observer questions are adequate.** The CAARS items successfully
-   differentiate persona strength across turns. The T6→T18 increase pattern
-   (observers need a few turns to see ADHD traits) is consistently reproduced
-   across Gemini and Minimax. This is not a flaw in the questions but a
-   property of the shorter, optimized conversation format.
+5. **The CAARS questions work well.** The issue is not with the questionnaire
+   items but with how reasoning models interpret "observable behavioral
+   patterns." Non-reasoning models (Gemini) follow the task straightforwardly.
+   Reasoning models (Grok, Kimi) sometimes overthink the epistemological
+   question of what can be "observed" in text.
+
+6. **Potential improvement for reasoning observers.** The observer prompt
+   could be modified to explicitly state "Rate based on the conversational
+   content and style, not just directly visible physical behaviors" to reduce
+   the literalist interpretation. This is a future optimization, not needed
+   for the current benchmark since Gemini works well.
